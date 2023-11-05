@@ -24,7 +24,6 @@
 
 (defonce previous* (atom nil))
 
-
 (defn get-logits [ctx s]
   (raw/llama_set_rng_seed ctx 1234)
   (cond
@@ -46,7 +45,42 @@
 
   (into [] (llama/get-logits ctx)))
 
-(->> "Clojure is a"
+(->> ["Good morning."]
      (get-logits llama-context)
      argops/argmax
      token->str)
+
+(->> ["Good morning."
+      "What is good?"]
+     (get-logits llama-context)
+     argops/argmax
+     token->str)
+
+(defn llama2-prompt
+  "Meant to work with llama-2-7b-chat.ggmlv3.q4_0.bin"
+  [prompt]
+  (str
+   "[INST] <<SYS>>
+You are a helpful, respectful and honest assistant. Always answer as helpfully as possible, while being safe.  Your answers should not include any harmful, unethical, racist, sexist, toxic, dangerous, or illegal content. Please ensure that your responses are socially unbiased and positive in nature.
+
+If a question does not make any sense, or is not factually coherent, explain why instead of answering something not correct. If you don't know the answer to a question, please don't share false information.
+<</SYS>>
+
+" prompt " [/INST]
+"))
+
+(def response-tokens
+  (loop [tokens (llutil/tokenize llama-context
+                                 (llama2-prompt "describe clojure in one sentence."))]
+    (let [logits (get-logits llama-context tokens)
+          ;; greedy sampling
+          token (->> logits
+                     (map-indexed (fn [idx p]
+                                    [idx p]))
+                     (apply max-key second)
+                     first)]
+      (if (= token (llama/eos))
+        tokens
+        (recur (conj tokens token))))))
+
+(llutil/untokenize llama-context response-tokens)
