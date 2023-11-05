@@ -1,0 +1,3 @@
+{:deps {com.phronemophobic/llama-clj-combined {:mvn/version "0.8"}
+        instaparse/instaparse {:mvn/version "1.4.12"}
+        scicloj/tablecloth {:mvn/version "7.014"}}}
