@@ -4,14 +4,21 @@
             [com.phronemophobic.llama.raw :as raw]
             [com.phronemophobic.llama.util :as llutil]
             [clojure.java.io :as io]
-            [clojure.string :as str]
+            [clojure.string :as string]
+            [tech.v3.datatype :as dtype]
             [tech.v3.datatype.functional :as fun]
-            [tech.v3.datatype.argops :as argops]))
+            [tech.v3.datatype.argops :as argops]
+            [tablecloth.api :as tc]))
+
+
+(defn now []
+  (java.util.Date.))
 
 ;; copied from the original llamma.clj tutorials
 
 (defonce llama7b-path "/workspace/models/llama-2-7b-chat.ggmlv3.q4_0.bin")
 (defonce llama-context (llama/create-context llama7b-path {}))
+(def llama-eos (llama/eos llama-context))
 
 (def token->str
   (into (sorted-map)
@@ -48,39 +55,71 @@
 (->> ["Good morning."]
      (get-logits llama-context)
      argops/argmax
-     token->str)
+     token->str
+     delay)
 
 (->> ["Good morning."
       "What is good?"]
      (get-logits llama-context)
      argops/argmax
-     token->str)
+     token->str
+     delay)
 
-(defn llama2-prompt
-  "Meant to work with llama-2-7b-chat.ggmlv3.q4_0.bin"
-  [prompt]
-  (str
-   "[INST] <<SYS>>
-You are a helpful, respectful and honest assistant. Always answer as helpfully as possible, while being safe.  Your answers should not include any harmful, unethical, racist, sexist, toxic, dangerous, or illegal content. Please ensure that your responses are socially unbiased and positive in nature.
+(def samplef
+  (llama/init-mirostat-v2-sampler llama-context))
 
-If a question does not make any sense, or is not factually coherent, explain why instead of answering something not correct. If you don't know the answer to a question, please don't share false information.
-<</SYS>>
+(defn M-step [previous-tokens]
+  (prn [(now) (count previous-tokens)])
+  (->> previous-tokens
+       (get-logits llama-context)
+       samplef
+       (conj previous-tokens)))
 
-" prompt " [/INST]
-"))
+(defn finished? [tokens]
+  (-> tokens
+      last
+      (= llama-eos)))
 
-(def response-tokens
-  (loop [tokens (llutil/tokenize llama-context
-                                 (llama2-prompt "describe clojure in one sentence."))]
-    (let [logits (get-logits llama-context tokens)
-          ;; greedy sampling
-          token (->> logits
-                     (map-indexed (fn [idx p]
-                                    [idx p]))
-                     (apply max-key second)
-                     first)]
-      (if (= token (llama/eos))
-        tokens
-        (recur (conj tokens token))))))
+(->> "Very briefly, Clojure is a"
+     (llutil/tokenize llama-context)
+     (iterate M-step)
+     (take 500)
+     (filter finished?)
+     first
+     (llutil/untokenize llama-context))
 
-(llutil/untokenize llama-context response-tokens)
+(defn G [previous-tokens current-tokens]
+  (when (-> current-tokens
+            (->> (llama-context llutil/untokenize))
+            (string/split  #" ")
+            (->> (every? #(-> % count (<= 5)))))
+    1 0))
+
+
+(let [N 20
+      K 3
+      s0 []]
+  (loop [particles (tc/dataset {:x [s0]
+                                :w [1]})
+         t 1]
+    (let [particles1 (-> particles
+                         (tc/map-columns :finished [:x] finished?))]
+      (if (->> particles1 :finished (every? true?))
+        {:particles particles
+         :Z (fun/mean ws)}
+        ;; else
+        (-> particles1
+            (tc/map-columns :K [:finished] :int32 #(+ (* K (- 1 %))
+                                                      %))
+            (tc/add-column :N-prime #(-> % :K fun/sum))
+            (tc/map-columns :new-xs
+                            [:x :finished :N-prime]
+                            (fn [x w finished N-prime]
+                              (if finished
+                                [x (* w N-prime (/ N))]
+                                ;; else
+                                ))))
+        (let [Ks
+              N-prime (fun/sum Ks)
+              new-xs (->> xs
+                          )])))))
