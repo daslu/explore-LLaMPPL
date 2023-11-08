@@ -31,9 +31,8 @@
         (range 0 Integer/MAX_VALUE)))
 
 (defonce previous* (atom nil))
-
 (defn get-logits [ctx s]
-  (raw/llama_set_rng_seed ctx 1234)
+  #_(raw/llama_set_rng_seed ctx 1234)
   (cond
 
     (string? s)
@@ -66,7 +65,9 @@
        argops/argmax
        token->str))
 
-(defn M-step [previous-tokens]
+
+
+(defn M-step [samplef previous-tokens]
   (prn [:M (now) (count previous-tokens)])
   (->> previous-tokens
        (get-logits llama-context)
@@ -78,28 +79,37 @@
       last
       (= llama-eos)))
 
-(delay
-  (->> "What is"
-       (llutil/tokenize llama-context)
-       (iterate M-step)
-       (take 5)
-       last
-       (llutil/untokenize llama-context)))
+(defn gen-samplef [seed]
+  (raw/llama_set_rng_seed llama-context seed)
+  (llama/init-mirostat-v2-sampler llama-context))
 
 (delay
-  (->> "In one brief sentence, Clojure is a"
-       (llutil/tokenize llama-context)
-       (iterate M-step)
-       (take 500)
-       (filter finished?)
-       first
-       (llutil/untokenize llama-context)))
+  (let [samplef (gen-samplef 1234)]
+    (repeatedly 3
+                #(->> "What is"
+                      (llutil/tokenize llama-context)
+                      (iterate (partial M-step samplef))
+                      (take 5)
+                      last
+                      (llutil/untokenize llama-context)))))
 
-(defn G [current-tokens]
+(delay
+  (let [samplef (gen-samplef 12345)]
+    (->> #(->> "In one brief sentence, Clojure is a"
+               (llutil/tokenize llama-context)
+               (iterate (partial M-step samplef))
+               (take 500)
+               (filter finished?)
+               first
+               (llutil/untokenize llama-context))
+         (repeatedly 3)
+         vec)))
+
+(defn G [threshold current-tokens]
   (if (-> current-tokens
           (->> (llutil/untokenize llama-context))
           (string/split  #" ")
-          (->> (every? #(-> % count (<= 20)))))
+          (->> (every? #(-> % count (<= threshold)))))
     1 0))
 
 
@@ -137,107 +147,111 @@
   (prn [tag x])
   x)
 
-(->> "In one brief sentence, Clojure is a"
-     (llutil/tokenize llama-context)
-     M-step
-     G)
+(delay
+  (let [samplef (gen-samplef 12345)]
+    (->> "In one brief sentence, Clojure is a"
+         (llutil/tokenize llama-context)
+         (M-step samplef)
+         (G 9))))
 
-#_(def results
-    (let [N 10
-          K 3
-          s0 (->> "In one brief sentence, Clojure is a"
-                  (llutil/tokenize llama-context))]
-      (loop [particles (tc/dataset {:x [s0]
-                                    :w [1]})]
-        (let [finished (->> particles
-                            :x
-                            (map finished?))]
-          (-> finished
-              frequencies
-              prn)
-          (if (every? true? finished)
-            {:particles particles
-             :Z (-> particles :w fun/mean)}
-            ;; else
-            (let [K (->> finished
-                         (map (fn [f]
-                                (if f 1 K))))
-                  N-prime (fun/sum K)]
-              (-> particles
-                  (tc/add-columns {:K K
-                                   :finished finished})
-                  (tc/rows :as-maps)
-                  (->> (map (fn [{:keys [x w finished K]}]
-                              (if finished
-                                (tc/dataset {:x [x]
-                                             :w [(* w N-prime (/ N))]})
-                                ;; else
-                                (-> (range K)
-                                    (->> (map (fn [k]
-                                                (-> {:x (M-step x)}))))
-                                    tc/dataset
-                                    (tc/map-columns
-                                     :w
-                                     [:x]
-                                     (fn [x]
-                                       (* (/ N-prime
-                                             (* K N))
-                                          w
-                                          (G x))))))))
-                       (apply tc/concat))
-                  (spy :before-normalize)
-                  (tc/add-column :w #(-> % :w normalize))
-                  (spy :after-normalize)
-                  ((fn [{:keys [x w]
-                         :as new-particles}]
-                     (prn [:new-particles new-particles])
-                     (let [w-sum (fun/sum w)
-                           c* (find-c w N)
-                           indexes (-> new-particles
-                                       tc/row-count
-                                       range)
-                           I-det (->> indexes
+
+(def results
+  (let [N 10
+        K 3
+        s0 (->> "In one brief sentence, Clojure is a"
+                (llutil/tokenize llama-context))
+        samplef (gen-samplef 12345)]
+    (loop [particles (tc/dataset {:x [s0]
+                                  :w [1]})]
+      (let [finished (->> particles
+                          :x
+                          (map finished?))]
+        (-> finished
+            frequencies
+            prn)
+        (if (every? true? finished)
+          {:particles particles
+           :Z (-> particles :w fun/mean)}
+          ;; else
+          (let [K (->> finished
+                       (map (fn [f]
+                              (if f 1 K))))
+                N-prime (fun/sum K)]
+            (-> particles
+                (tc/add-columns {:K K
+                                 :finished finished})
+                (tc/rows :as-maps)
+                (->> (map (fn [{:keys [x w finished K]}]
+                            (if finished
+                              (tc/dataset {:x [x]
+                                           :w [(* w N-prime (/ N))]})
+                              ;; else
+                              (-> (range K)
+                                  (->> (map (fn [k]
+                                              (-> {:x (M-step samplef x)}))))
+                                  tc/dataset
+                                  (tc/map-columns
+                                   :w
+                                   [:x]
+                                   (fn [x]
+                                     (* (/ N-prime
+                                           (* K N))
+                                        w
+                                        (G 9 x))))))))
+                     (apply tc/concat))
+                (spy :before-normalize)
+                (tc/add-column :w #(-> % :w normalize))
+                (spy :after-normalize)
+                ((fn [{:keys [x w]
+                       :as new-particles}]
+                   (prn [:new-particles new-particles])
+                   (let [w-sum (fun/sum w)
+                         c* (find-c w N)
+                         indexes (-> new-particles
+                                     tc/row-count
+                                     range)
+                         I-det (->> indexes
+                                    (filter (fn [i]
+                                              (-> i
+                                                  w
+                                                  (* c*)
+                                                  (>= 1)))))
+                         I-stoch (->> indexes
                                       (filter (fn [i]
                                                 (-> i
                                                     w
                                                     (* c*)
-                                                    (>= 1)))))
-                           I-stoch (->> indexes
-                                        (filter (fn [i]
-                                                  (-> i
-                                                      w
-                                                      (* c*)
-                                                      (< 1))))
-                                        vec)
-                           alpha (/ (->> I-stoch
-                                         (map w)
-                                         fun/sum)
-                                    (- N (count I-det)))
-                           I-strat (loop [candidates I-stoch
-                                          U (* alpha (rand))
-                                          I-strat []]
-                                     (if (empty? candidates)
-                                       I-strat
-                                       (let [i (first candidates)]
-                                         (if (-> i w (> U))
-                                           (recur (rest candidates)
-                                                  (- U (w i))
-                                                  (conj I-strat i))
-                                           (recur (rest candidates)
-                                                  U
-                                                  I-strat)))))]
-                       (tc/dataset
-                        (concat (->> I-det
-                                     (map (fn [i]
-                                            {:x (x i)
-                                             :w (* (w i)
-                                                   (/ N N-prime))})))
-                                (->> I-strat
-                                     (map (fn [i]
-                                            {:x (x i)
-                                             :w (* (/ N N-prime c*)
-                                                   w-sum)}))))))))
-                  recur)))))))
+                                                    (< 1))))
+                                      vec)
+                         alpha (/ (->> I-stoch
+                                       (map w)
+                                       fun/sum)
+                                  (- N (count I-det)))
+                         I-strat (loop [candidates I-stoch
+                                        U (* alpha (rand))
+                                        I-strat []]
+                                   (if (empty? candidates)
+                                     I-strat
+                                     (let [i (first candidates)]
+                                       (if (-> i w (> U))
+                                         (recur (rest candidates)
+                                                (- U (w i))
+                                                (conj I-strat i))
+                                         (recur (rest candidates)
+                                                U
+                                                I-strat)))))]
+                     (tc/dataset
+                      (concat (->> I-det
+                                   (map (fn [i]
+                                          {:x (x i)
+                                           :w (* (w i)
+                                                 (/ N N-prime))})))
+                              (->> I-strat
+                                   (map (fn [i]
+                                          {:x (x i)
+                                           :w (* (/ N N-prime c*)
+                                                 w-sum)}))))))))
+                recur)))))))
 
 
 
@@ -283,14 +297,14 @@
         fun/log
         fun/+ m)))
 
-(let [ess-threshold 0.5
-      s0 (->> "In one brief sentence, Clojure is a"
-              (llutil/tokenize llama-context))
-      n-particles 10]
-  (loop [particles (tc/dataset
-                    {:x (repeat n-particles s0)
-                     :w 0})]
-    (let [finished (->> particles
+#_(let [ess-threshold 0.5
+        s0 (->> "In one brief sentence, Clojure is a"
+                (llutil/tokenize llama-context))
+        n-particles 10]
+    (loop [particles (tc/dataset
+                      {:x (repeat n-particles s0)
+                       :w 0})]
+     (let [finished (->> particles
                         :x
                         (map finished?))]
       (-> finished
