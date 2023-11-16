@@ -156,7 +156,7 @@
 
 
 (def results
-  (let [N 10
+  (let [N 50
         K 3
         s0 (->> "In one brief sentence, Clojure is a"
                 (llutil/tokenize llama-context))
@@ -166,9 +166,10 @@
       (let [finished (->> particles
                           :x
                           (map finished?))]
-        (-> finished
-            frequencies
-            prn)
+        (->> finished
+             frequencies
+             (vector :finished-freqs)
+             prn)
         (if (every? true? finished)
           {:particles particles
            :Z (-> particles :w fun/mean)}
@@ -240,6 +241,10 @@
                                          (recur (rest candidates)
                                                 U
                                                 I-strat)))))]
+                     (prn [:c* c*
+                           :I-det I-det
+                           :I-stoch I-stoch
+                           :I-strat I-strat])
                      (tc/dataset
                       (concat (->> I-det
                                    (map (fn [i]
