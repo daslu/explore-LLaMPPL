@@ -95,14 +95,14 @@
 
 (delay
   (let [samplef (gen-samplef 12345)]
-    (->> #(->> "In one brief sentence, Clojure is a"
+    (->> #(->> "Please complete the sentence in ten words. Clojure is a"
                (llutil/tokenize llama-context)
                (iterate (partial M-step samplef))
                (take 500)
                (filter finished?)
                first
                (llutil/untokenize llama-context))
-         (repeatedly 3)
+         (repeatedly 5)
          vec)))
 
 (defn G [threshold current-tokens]
@@ -149,16 +149,16 @@
 
 (delay
   (let [samplef (gen-samplef 12345)]
-    (->> "In one brief sentence, Clojure is a"
+    (->> "Please complete the sentence in ten words. Clojure is a"
          (llutil/tokenize llama-context)
          (M-step samplef)
          (G 9))))
 
 
 (def results
-  (let [N 50
+  (let [N 10
         K 3
-        s0 (->> "In one brief sentence, Clojure is a"
+        s0 (->> "Please complete the sentence in ten words. Clojure is a"
                 (llutil/tokenize llama-context))
         samplef (gen-samplef 12345)]
     (loop [particles (tc/dataset {:x [s0]
