@@ -233,10 +233,11 @@
                                         I-strat []]
                                    (if (empty? candidates)
                                      I-strat
-                                     (let [i (first candidates)]
-                                       (if (-> i w (> U))
+                                     (let [i (first candidates)
+                                           U (- U (w i))]
+                                       (if (neg? U)
                                          (recur (rest candidates)
-                                                (- U (w i))
+                                                (+ U alpha)
                                                 (conj I-strat i))
                                          (recur (rest candidates)
                                                 U
