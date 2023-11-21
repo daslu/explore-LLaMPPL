@@ -154,116 +154,130 @@
          (M-step samplef)
          (G 9))))
 
+(def *state (atom {:stop false
+                   :particles []}))
 
-(def results
-  (let [max-word-length 7
-        N 100
-        K 3
-        s0 (->> "Here is a Haiku."
-                (llutil/tokenize llama-context))
-        samplef (gen-samplef 12345)]
-    (loop [particles (tc/dataset {:x [s0]
-                                  :w [1]})]
-      (let [finished (->> particles
-                          :x
-                          (map finished?))]
-        (->> finished
-             frequencies
-             (vector :finished-freqs)
-             prn)
-        (if (every? true? finished)
-          {:particles particles
-           :Z (-> particles :w fun/mean)}
-          ;; else
-          (let [K (->> finished
-                       (map (fn [f]
-                              (if f 1 K))))
-                N-prime (fun/sum K)]
-            (-> particles
-                (tc/add-columns {:K K
-                                 :finished finished})
-                (tc/rows :as-maps)
-                (->> (map (fn [{:keys [x w finished K]}]
-                            (if finished
-                              (tc/dataset {:x [x]
-                                           :w [(* w N-prime (/ N))]})
-                              ;; else
-                              (-> (range K)
-                                  (->> (map (fn [k]
-                                              (-> {:x (M-step samplef x)}))))
-                                  tc/dataset
-                                  (tc/map-columns
-                                   :w
-                                   [:x]
-                                   (fn [x]
-                                     (* (/ N-prime
-                                           (* K N))
-                                        w
-                                        (G max-word-length x))))))))
-                     (apply tc/concat))
-                (spy :before-normalize)
-                (tc/add-column :w #(-> % :w normalize))
-                (spy :after-normalize)
-                ((fn [{:keys [x w]
-                       :as new-particles}]
-                   (prn [:new-particles new-particles])
-                   (let [w-sum (fun/sum w)
-                         c* (find-c w N)
-                         indexes (-> new-particles
-                                     tc/row-count
-                                     range)
-                         I-det (->> indexes
-                                    (filter (fn [i]
-                                              (-> i
-                                                  w
-                                                  (* c*)
-                                                  (>= 1)))))
-                         I-stoch (->> indexes
-                                      (filter (fn [i]
-                                                (-> i
-                                                    w
-                                                    (* c*)
-                                                    (< 1))))
-                                      vec)
-                         alpha (/ (->> I-stoch
-                                       (map w)
-                                       fun/sum)
-                                  (- N (count I-det)))
-                         I-strat (loop [candidates I-stoch
-                                        U (* alpha (rand))
-                                        I-strat []]
-                                   (if (empty? candidates)
-                                     I-strat
-                                     (let [i (first candidates)
-                                           U (- U (w i))]
-                                       (if (neg? U)
-                                         (recur (rest candidates)
-                                                (+ U alpha)
-                                                (conj I-strat i))
-                                         (recur (rest candidates)
-                                                U
-                                                I-strat)))))]
-                     (prn [:c* c*
-                           :I-det I-det
-                           :I-stoch I-stoch
-                           :I-strat I-strat])
-                     (tc/dataset
-                      (concat (->> I-det
-                                   (map (fn [i]
-                                          {:x (x i)
-                                           :w (* (w i)
-                                                 (/ N N-prime))})))
-                              (->> I-strat
-                                   (map (fn [i]
-                                          {:x (x i)
-                                           :w (* (/ N N-prime c*)
-                                                 w-sum)}))))))))
-                recur)))))))
+(defn now []
+  (java.util.Date.))
+
+(let [max-word-length 8
+      N 50
+      K 2
+      s0 (->> "An English Haiku about Rain:"
+              (llutil/tokenize llama-context))
+      samplef (gen-samplef 12345)
+      initial-N 10]
+  (swap! *state
+         assoc :particles  (tc/dataset {:x (repeat initial-N s0)
+                                        :w 1
+                                        :time (repeat initial-N (now))
+                                        :generaiton 0}))
+  (loop [generation 1]
+    (let [particles (:particles @*state)
+          finished (->> particles
+                        :x
+                        (map finished?))]
+      (->> finished
+           frequencies
+           (vector :finished-freqs)
+           prn)
+      (if (or (:stop @*state)
+              (every? true? finished))
+        {:particles particles
+         :Z (-> particles :w fun/mean)}
+        ;; else
+        (let [K (->> finished
+                     (map (fn [f]
+                            (if f 1 K))))
+              N-prime (fun/sum K)
+              new-particles (-> particles
+                                (tc/add-columns {:K K
+                                                 :finished finished})
+                                (tc/rows :as-maps)
+                                (->> (map (fn [{:keys [x w finished K]}]
+                                            (if finished
+                                              (tc/dataset {:x [x]
+                                                           :w [(* w N-prime (/ N))]
+                                                           :time [(now)]
+                                                           :generaiton generation})
+                                              ;; else
+                                              (-> (range K)
+                                                  (->> (map (fn [k]
+                                                              (-> {:x (M-step samplef x)}))))
+                                                  tc/dataset
+                                                  (tc/map-columns
+                                                   :w
+                                                   [:x]
+                                                   (fn [x]
+                                                     (* (/ N-prime
+                                                           (* K N))
+                                                        w
+                                                        (G max-word-length x))))))))
+                                     (apply tc/concat))
+                                (spy :before-normalize)
+                                (tc/add-column :w #(-> % :w normalize))
+                                (spy :after-normalize)
+                                ((fn [{:keys [x w time generation]
+                                       :as new-particles}]
+                                   (prn [:new-particles new-particles])
+                                   (let [w-sum (fun/sum w)
+                                         c* (find-c w N)
+                                         indexes (-> new-particles
+                                                     tc/row-count
+                                                     range)
+                                         I-det (->> indexes
+                                                    (filter (fn [i]
+                                                              (-> i
+                                                                  w
+                                                                  (* c*)
+                                                                  (>= 1)))))
+                                         I-stoch (->> indexes
+                                                      (filter (fn [i]
+                                                                (-> i
+                                                                    w
+                                                                    (* c*)
+                                                                    (< 1))))
+                                                      vec)
+                                         alpha (/ (->> I-stoch
+                                                       (map w)
+                                                       fun/sum)
+                                                  (- N (count I-det)))
+                                         I-strat (loop [candidates I-stoch
+                                                        U (* alpha (rand))
+                                                        I-strat []]
+                                                   (if (empty? candidates)
+                                                     I-strat
+                                                     (let [i (first candidates)
+                                                           U (- U (w i))]
+                                                       (if (neg? U)
+                                                         (recur (rest candidates)
+                                                                (+ U alpha)
+                                                                (conj I-strat i))
+                                                         (recur (rest candidates)
+                                                                U
+                                                                I-strat)))))]
+                                     (prn [:c* c*
+                                           :I-det I-det
+                                           :I-stoch I-stoch
+                                           :I-strat I-strat])
+                                     (tc/dataset
+                                      (concat (->> I-det
+                                                   (map (fn [i]
+                                                          {:x (x i)
+                                                           :w (* (w i)
+                                                                 (/ N N-prime))})))
+                                              (->> I-strat
+                                                   (map (fn [i]
+                                                          {:x (x i)
+                                                           :w (* (/ N N-prime c*)
+                                                                 w-sum)})))))))))]
+          (swap! *state
+                 assoc :particles new-particles)
+          (recur (inc generation)))))))
 
 
 
 (delay
-  (->> results
-       :particles
-       :x
-       (map (partial llutil/untokenize llama-context))))
+  (-> @*state
+      :particles
+      (tc/map-columns :text [:x] (partial llutil/untokenize llama-context))))
