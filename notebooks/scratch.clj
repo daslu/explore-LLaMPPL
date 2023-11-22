@@ -95,7 +95,7 @@
 
 (delay
   (let [samplef (gen-samplef 12345)]
-    (->> #(->> "The Fed says"
+    (->> #(->> "Write a poem that is tiny but nice."
                (llutil/tokenize llama-context)
                (iterate (partial M-step samplef))
                (take 500)
@@ -162,12 +162,12 @@
 
 (delay
   (let [max-token-length 5
-        N 50
-        K 2
-        s0 (->> "Can you tell me what rain is?"
+        N 200
+        K 3
+        s0 (->> "The Fed says"
                 (llutil/tokenize llama-context))
         samplef (gen-samplef 12345)
-        initial-N 10]
+        initial-N 20]
     (swap! *state
            assoc :particles  (tc/dataset {:x (repeat initial-N s0)
                                           :w 1
@@ -294,4 +294,6 @@
       (tc/map-columns :x
                       [:x]
                       (partial llutil/untokenize
-                               llama-context))))
+                               llama-context))
+      ((juxt identity
+             (partial spit "/tmp/particles.csv")))))
