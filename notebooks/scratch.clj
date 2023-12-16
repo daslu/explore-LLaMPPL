@@ -9,6 +9,7 @@
             [tech.v3.datatype :as dtype]
             [tech.v3.datatype.functional :as fun]
             [tech.v3.datatype.argops :as argops]
+            [tech.v3.dataset.print]
             [tablecloth.api :as tc]))
 
 
@@ -95,7 +96,7 @@
 
 (delay
   (let [samplef (gen-samplef 12345)]
-    (->> #(->> "Write a poem that is tiny but nice."
+    (->> #(->> "Write a short and wise poem."
                (llutil/tokenize llama-context)
                (iterate (partial M-step samplef))
                (take 500)
@@ -162,7 +163,7 @@
 
 (delay
   (let [max-token-length 5
-        N 200
+        N 20
         K 3
         s0 (->> "The Fed says"
                 (llutil/tokenize llama-context))
@@ -200,7 +201,7 @@
                                               (if finished
                                                 (tc/dataset {:x [x]
                                                              :w [(* w N-prime (/ N))]
-                                                             :time [(now)]
+                                                             :time [(:time row)]
                                                              :gen [(:gen row)]})
                                                 ;; else
                                                 (-> (range K)
@@ -291,9 +292,13 @@
       (tc/map-columns :finished
                       [:x]
                       finished?)
+      (tc/map-columns :length
+                      [:x]
+                      count)
       (tc/map-columns :x
                       [:x]
                       (partial llutil/untokenize
                                llama-context))
-      ((juxt identity
-             (partial spit "/tmp/particles.csv")))))
+      #_(tc/drop-columns [:x])
+      (tech.v3.dataset.print/print-range :all)
+      (tc/write! "/tmp/particles.csv")))
