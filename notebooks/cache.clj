@@ -66,31 +66,31 @@
        argops/argmax
        token->str))
 
+(defmacro ttime [tag form]
+  `(do (println (str "\t" ~tag))
+       (print "\t  ")
+       (time ~form)))
 
-(defn test-texts [text1 text2]
+(defn test-texts [ctx text1 text2]
   (prn [:----------------])
-  (time
-   (let [ctx (time (llama/create-context llama7b-path {}))]
-     (time (raw/llama_set_rng_seed ctx 1234))
-     (prn :bos)
-     (time (llama/llama-update ctx (llama/bos) 0))
-     (let [_ (prn text1)
-           _ (time (llama/llama-update ctx text1))
-           x (-> ctx
-                 llama/get-logits
-                 argops/argmax
-                 token->str)
-           _ (prn text2)
-           _ (time (llama/llama-update ctx text2))
-           y(-> ctx
-                llama/get-logits
-                argops/argmax
-                token->str)]
-       (prn [:----------------])
-       [x y]))))
+  (do (raw/llama_set_rng_seed ctx 1234)
+      (let [;; _ (ttime :bos (llama/llama-update ctx (llama/bos) 0))
+            _ (ttime text1 (llama/llama-update ctx text1))
+            x (-> ctx
+                  llama/get-logits
+                  argops/argmax
+                  token->str)
+            ;; _ (ttime :bos (llama/llama-update ctx (llama/bos) 0))
+            _ (ttime text2 (llama/llama-update ctx text2))
+            y (-> ctx
+                  llama/get-logits
+                  argops/argmax
+                  token->str)]
+        [x y])))
 
-(test-texts "Good Morning, my"
-            "Good Morning, my")
-
-(test-texts "Good Morning, my"
-            "Good Morning, my dear")
+(let [ctx (llama/create-context llama7b-path {:f16-kv true})]
+  (repeatedly
+   4
+   #(test-texts ctx
+                "How much wood would a woodchuck chuck if a woodchuck would chuck wood?"
+                "How much wood would a woodchuck chuck if a lion may chuck stone?")))
