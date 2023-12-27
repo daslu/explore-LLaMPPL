@@ -79,10 +79,10 @@
                (llama/llama-update ctx (llama/bos) 0)
                (ttime :bos (llama/llama-update ctx (llama/bos) 0))
                (ttime text (llama/llama-update ctx text))
-               [text(-> ctx
-                        llama/get-logits
-                        argops/argmax
-                        token->str)
+               [text (-> ctx
+                         llama/get-logits
+                         argops/argmax
+                         token->str)
                 (raw/llama_get_kv_cache_token_count ctx)
                 (raw/llama_n_ctx ctx)]))))
 
