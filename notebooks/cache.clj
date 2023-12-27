@@ -46,7 +46,7 @@
            (= prev (butlast s)))
         (llama/llama-update ctx (last s))
         (do
-          (llama/llama-update ctx (llama/bos) 0)
+          (llama/llama-update ctx (llama/bos) #_0)
           (run! #(llama/llama-update ctx %)
                 s)))))
   (reset! previous* s)
@@ -71,26 +71,25 @@
        (print "\t  ")
        (time ~form)))
 
-(defn test-texts [ctx text1 text2]
-  (prn [:----------------])
-  (do (raw/llama_set_rng_seed ctx 1234)
-      (let [;; _ (ttime :bos (llama/llama-update ctx (llama/bos) 0))
-            _ (ttime text1 (llama/llama-update ctx text1))
-            x (-> ctx
-                  llama/get-logits
-                  argops/argmax
-                  token->str)
-            ;; _ (ttime :bos (llama/llama-update ctx (llama/bos) 0))
-            _ (ttime text2 (llama/llama-update ctx text2))
-            y (-> ctx
-                  llama/get-logits
-                  argops/argmax
-                  token->str)]
-        [x y])))
 
-(let [ctx (llama/create-context llama7b-path {:f16-kv true})]
-  (repeatedly
-   4
-   #(test-texts ctx
-                "How much wood would a woodchuck chuck if a woodchuck would chuck wood?"
-                "How much wood would a woodchuck chuck if a lion may chuck stone?")))
+(defn test-texts [ctx texts]
+  (raw/llama_set_rng_seed ctx 1234)
+  (->> texts
+       (mapv (fn [text]
+               (llama/llama-update ctx (llama/bos) 0)
+               (ttime :bos (llama/llama-update ctx (llama/bos) 0))
+               (ttime text (llama/llama-update ctx text))
+               [text(-> ctx
+                        llama/get-logits
+                        argops/argmax
+                        token->str)
+                (raw/llama_get_kv_cache_token_count ctx)
+                (raw/llama_n_ctx ctx)]))))
+
+(comment
+  (-> "How much wood would a woodchuck chuck if a woodchuck would chuck wood?"
+      (string/split #" ")
+      (->> (reductions #(str %1 " " %2) "")
+           (drop 1)
+           reverse
+           (test-texts (llama/create-context llama7b-path {:logits-all true})))))
