@@ -63,6 +63,11 @@
                     :or {sub-trie trie
                          path []
                          remaining-tokens tokens}}]
+  #_(-> context
+        (select-keys [:path
+                      :tokens
+                      :remaining-tokens])
+        prn)
   (if (empty? remaining-tokens)
     context
     ;; else
@@ -70,6 +75,9 @@
           rest-tokens (rest remaining-tokens)
           next-step [:children token]
           next-path (concat path next-step)]
+      #_(prn [:DBG
+              {:path path
+               :try (some? (get-in sub-trie next-step))}])
       (if-let [next-sub-trie (get-in sub-trie next-step)]
         (recur (-> context
                    (assoc
@@ -77,7 +85,7 @@
                     :path next-path
                     :remaining-tokens rest-tokens)))
         ;; else
-        (let [_ (prn token)
+        (let [_ (prn [:EVAL token])
               _ (raw/llama_set_state_data llama-ctx
                                           (:llama-state sub-trie))
               _ (llama/llama-update llama-ctx
@@ -102,3 +110,54 @@
         :logits
         argops/argmax
         token->str)))
+
+(defonce *main-context (atom {}))
+
+(defn init! []
+  (let [llama-ctx (->llama-ctx)]
+    (llama/llama-update llama-ctx (llama/bos) 0)
+    (reset! *main-context
+            {:llama-ctx llama-ctx
+             :trie {:llama-state (get-state llama-ctx)}})))
+
+(init!)
+
+(defn cached-eval! [text]
+  (let [context (-> @*main-context
+                    (assoc :tokens
+                           (llutil/tokenize (:llama-ctx @*main-context)
+                                            text))
+                    cached-eval)]
+    (reset! *main-context
+            (select-keys context [:llama-ctx :trie]))
+    context))
+
+(defn now []
+  (java.util.Date.))
+
+(comment
+  (init!)
+
+  (-> "How much wood would a"
+      cached-eval!
+      :sub-trie
+      :logits
+      argops/argmax
+      token->str
+      (vector (now)))
+
+  (-> "How much wood would a woodchuck"
+      cached-eval!
+      :sub-trie
+      :logits
+      argops/argmax
+      token->str
+      (vector (now)))
+
+  (-> "How much wood would a woodchuck chuck"
+      cached-eval!
+      :sub-trie
+      :logits
+      argops/argmax
+      token->str
+      (vector (now))))
