@@ -1,4 +1,4 @@
 {:deps {com.phronemophobic/llama-clj {:mvn/version "0.8"}
         instaparse/instaparse {:mvn/version "1.4.12"}
         scicloj/tablecloth {:mvn/version "7.021"}}
- :aliases {:local-llama {:jvm-opts ["-Djna.library.path=/home/ubuntu/clones/llama.cpp/build"]}}}
+ :aliases {:local-llama {:jvm-opts ["-Djna.library.path=/workspace/clones/llama.cpp/build"]}}}
