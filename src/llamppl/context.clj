@@ -3,7 +3,8 @@
             [com.phronemophobic.llama :as llama]
             [com.phronemophobic.llama.raw :as raw]
             [com.phronemophobic.llama.util :as llutil]
-            [tech.v3.datatype.argops :as argops]))
+            [tech.v3.datatype.argops :as argops]
+            [llamppl.util :as util]))
 
 (defonce llama7b-path "/workspace/models/llama-2-7b-chat.ggmlv3.q4_0.bin")
 
@@ -15,15 +16,19 @@
 (defn ->llama-ctx []
   (llama/create-context llama7b-path {}))
 
+(def base-llama-ctx
+  (->llama-ctx))
+
 (def token->str
-  (let [llama-ctx (->llama-ctx)]
-    (into (sorted-map)
-          (comp (map
-                 (fn [token]
-                   [token (raw/llama_token_to_str llama-ctx token)]))
-                (take-while (fn [[token untoken]]
-                              untoken)))
-          (range 0 Integer/MAX_VALUE))))
+  (into (sorted-map)
+        (comp (map
+               (fn [token]
+                 [token (raw/llama_token_to_str base-llama-ctx token)]))
+              (take-while (fn [[token untoken]]
+                            untoken)))
+        (range 0 Integer/MAX_VALUE)))
+
+(def llama-eos (llama/eos base-llama-ctx))
 
 (defn ->token-trie [details]
   (-> details
@@ -98,18 +103,23 @@
                             :path next-path
                             :remaining-tokens rest-tokens))))))))
 
-(comment
-  (let [llama-ctx (->llama-ctx)]
-    (llama/llama-update llama-ctx (llama/bos) 0)
-    (-> {:llama-ctx llama-ctx
-         :trie {:llama-state (get-state llama-ctx)}
-         :tokens (->> "How much wood would a"
-                      (llutil/tokenize llama-ctx))}
-        cached-eval
-        :sub-trie
-        :logits
-        argops/argmax
-        token->str)))
+(defn tokenize [text]
+  (llutil/tokenize base-llama-ctx text))
+
+(defn untokenize [tokens]
+  (llutil/untokenize base-llama-ctx tokens))
+
+(delay
+ (let [llama-ctx (->llama-ctx)]
+   (llama/llama-update llama-ctx (llama/bos) 0)
+   (-> {:llama-ctx llama-ctx
+        :trie {:llama-state (get-state llama-ctx)}
+        :tokens (tokenize "How much wood would a")}
+       cached-eval
+       :sub-trie
+       :logits
+       argops/argmax
+       token->str)))
 
 (defonce *main-context (atom {}))
 
@@ -122,42 +132,55 @@
 
 (init!)
 
-(defn cached-eval! [text]
+
+
+(defn cached-eval! [tokens]
   (let [context (-> @*main-context
-                    (assoc :tokens
-                           (llutil/tokenize (:llama-ctx @*main-context)
-                                            text))
+                    (assoc :tokens tokens)
                     cached-eval)]
     (reset! *main-context
             (select-keys context [:llama-ctx :trie]))
     context))
 
-(defn now []
-  (java.util.Date.))
-
-(comment
-  (init!)
-
-  (-> "How much wood would a"
+(defn logits! [tokens]
+  (-> tokens
       cached-eval!
       :sub-trie
-      :logits
-      argops/argmax
-      token->str
-      (vector (now)))
+      :logits))
 
-  (-> "How much wood would a woodchuck"
-      cached-eval!
-      :sub-trie
-      :logits
-      argops/argmax
-      token->str
-      (vector (now)))
+(delay
+ (init!)
 
-  (-> "How much wood would a woodchuck chuck"
-      cached-eval!
-      :sub-trie
-      :logits
-      argops/argmax
-      token->str
-      (vector (now))))
+ (-> "How much wood would a"
+     tokenize
+     logits!
+     argops/argmax
+     token->str
+     (vector (util/now)))
+
+ (-> "How much wood would a woodchuck"
+     tokenize
+     logits!
+     argops/argmax
+     token->str
+     (vector (util/now)))
+
+ (-> "How much wood would a woodchuck chuck"
+     tokenize
+     logits!
+     argops/argmax
+     token->str
+     (vector (util/now))))
+
+
+(defn gen-samplef [seed]
+  (raw/llama_set_rng_seed base-llama-ctx seed)
+  (llama/init-mirostat-v2-sampler base-llama-ctx))
+
+
+(delay
+  (let [samplef (gen-samplef 123456)
+        logits (-> "How much wood would a woodchuck chuck"
+                   tokenize
+                   logits!)]
+    (samplef logits)))
