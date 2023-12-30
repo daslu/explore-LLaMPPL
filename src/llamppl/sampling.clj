@@ -53,54 +53,56 @@
          (repeatedly 1)
          vec)))
 
-;; (defn G [threshold current-tokens]
-;;   (if (-> current-tokens
-;;           (->> (llutil/untokenize llama-ctx))
-;;           (string/split  #" ")
-;;           (->> (every? #(-> % count (<= threshold)))))
-;;     1 0))
+(defn G [threshold current-tokens]
+  (if (-> current-tokens
+          context/untokenize
+          (string/split  #" ")
+          (->> (every? #(-> % count (<= threshold)))))
+    1 0))
 
 
-;; (defn normalize [ws]
-;;   (fun// ws
-;;          (fun/sum ws)))
+(defn normalize [ws]
+  (fun// ws
+         (fun/sum ws)))
 
-;; (defn find-c [weights N]
-;;   (prn [:weights weights
-;;         :N N])
-;;   (let [sorted-weights (vec (sort weights))]
-;;     (loop [B-val 0.0
-;;            A-val (count weights)
-;;            i 0]
-;;       (let [chi (sorted-weights i)
-;;             new-A-val (dec A-val)
-;;             new-B-val (+ B-val chi)]
-;;         (if (= i N)
-;;           N
-;;           (if (-> new-B-val
-;;                   (/ chi)
-;;                   (+ new-A-val)
-;;                   (- N)
-;;                   (<= 1e-12))
-;;             (/ (- N new-A-val)
-;;                new-B-val)
-;;             (recur new-B-val
-;;                    new-A-val
-;;                    (inc i))))))))
+(defn find-c [weights N]
+  (prn [:weights weights
+        :N N])
+  (let [sorted-weights (vec (sort weights))]
+    (loop [B-val 0.0
+           A-val (count weights)
+           i 0]
+      (let [chi (sorted-weights i)
+            new-A-val (dec A-val)
+            new-B-val (+ B-val chi)]
+        (if (= i N)
+          N
+          (if (-> new-B-val
+                  (/ chi)
+                  (+ new-A-val)
+                  (- N)
+                  (<= 1e-12))
+            (/ (- N new-A-val)
+               new-B-val)
+            (recur new-B-val
+                   new-A-val
+                   (inc i))))))))
 
 
-;; #_(find-c [0.1 0.2] 10)
+(delay
+  (find-c [0.1 0.2] 10))
 
-;; (defn spy [x tag]
-;;   (prn [tag x])
-;;   x)
-
-;; (delay
-;;   (let [samplef (gen-samplef 12345)]
-;;     (->> "Please complete the sentence in ten words. Clojure is a"
-;;          (llutil/tokenize llama-ctx)
-;;          (M-step samplef)
-;;          (G 9))))
+(delay
+  (let [_ (context/init!)
+        samplef (context/gen-samplef 12345)]
+    (->> "Please complete the sentence in ten words. Clojure is a"
+         context/tokenize
+         (M-step samplef)
+         (M-step samplef)
+         (M-step samplef)
+         ((juxt context/untokenize
+                (partial G 9)
+                (partial G 12))))))
 
 ;; (def *state (atom {:stop false
 ;;                    :particles []}))
