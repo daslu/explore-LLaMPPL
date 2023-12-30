@@ -18,7 +18,7 @@
 (defn M-step [samplef previous-tokens]
   #_(prn [:M (util/now) (count previous-tokens)])
   (->> previous-tokens
-       context/logits!
+       context/logits
        samplef
        (conj previous-tokens)))
 
@@ -29,7 +29,8 @@
 
 
 (delay
-  (let [samplef (context/gen-samplef 1234)]
+  (let [_ (context/init!)
+        samplef (context/gen-samplef 1234)]
     (repeatedly 3
                 #(->> "What is"
                       context/tokenize
@@ -38,16 +39,18 @@
                       last
                       context/untokenize))))
 
+
 (delay
-  (let [samplef (context/gen-samplef 12345)]
-    (->> #(->> "Write a short and wise poem."
+  (let [_ (context/init!)
+        samplef (context/gen-samplef 12345)]
+    (->> #(->> "I'll just quote a poem."
                context/tokenize
                (iterate (partial M-step samplef))
-               (take 500)
+               (take 50)
                (filter finished?)
                first
                context/untokenize)
-         (repeatedly 5)
+         (repeatedly 1)
          vec)))
 
 ;; (defn G [threshold current-tokens]

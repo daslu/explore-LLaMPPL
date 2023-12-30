@@ -19,6 +19,12 @@
 (def base-llama-ctx
   (->llama-ctx))
 
+(defn tokenize [text]
+  (llutil/tokenize base-llama-ctx text))
+
+(defn untokenize [tokens]
+  (llutil/untokenize base-llama-ctx tokens))
+
 (def token->str
   (into (sorted-map)
         (comp (map
@@ -90,7 +96,7 @@
                     :path next-path
                     :remaining-tokens rest-tokens)))
         ;; else
-        (let [_ (prn [:EVAL token])
+        (let [_ (prn [:EVAL token (untokenize [token])])
               _ (raw/llama_set_state_data llama-ctx
                                           (:llama-state sub-trie))
               _ (llama/llama-update llama-ctx
@@ -103,23 +109,19 @@
                             :path next-path
                             :remaining-tokens rest-tokens))))))))
 
-(defn tokenize [text]
-  (llutil/tokenize base-llama-ctx text))
 
-(defn untokenize [tokens]
-  (llutil/untokenize base-llama-ctx tokens))
 
 (delay
- (let [llama-ctx (->llama-ctx)]
-   (llama/llama-update llama-ctx (llama/bos) 0)
-   (-> {:llama-ctx llama-ctx
-        :trie {:llama-state (get-state llama-ctx)}
-        :tokens (tokenize "How much wood would a")}
-       cached-eval
-       :sub-trie
-       :logits
-       argops/argmax
-       token->str)))
+  (let [llama-ctx (->llama-ctx)]
+    (llama/llama-update llama-ctx (llama/bos) 0)
+    (-> {:llama-ctx llama-ctx
+         :trie {:llama-state (get-state llama-ctx)}
+         :tokens (tokenize "How much wood would a")}
+        cached-eval
+        :sub-trie
+        :logits
+        argops/argmax
+        token->str)))
 
 (defonce *main-context (atom {}))
 
@@ -128,7 +130,8 @@
     (llama/llama-update llama-ctx (llama/bos) 0)
     (reset! *main-context
             {:llama-ctx llama-ctx
-             :trie {:llama-state (get-state llama-ctx)}})))
+             :trie {:llama-state (get-state llama-ctx)}}))
+  (System/gc))
 
 (init!)
 
@@ -142,45 +145,45 @@
             (select-keys context [:llama-ctx :trie]))
     context))
 
-(defn logits! [tokens]
+(defn logits [tokens]
   (-> tokens
       cached-eval!
       :sub-trie
       :logits))
 
 (delay
- (init!)
+  (init!)
 
- (-> "How much wood would a"
-     tokenize
-     logits!
-     argops/argmax
-     token->str
-     (vector (util/now)))
+  (-> "How much wood would a"
+      tokenize
+      logits
+      argops/argmax
+      token->str
+      (vector (util/now)))
 
- (-> "How much wood would a woodchuck"
-     tokenize
-     logits!
-     argops/argmax
-     token->str
-     (vector (util/now)))
+  (-> "How much wood would a woodchuck"
+      tokenize
+      logits
+      argops/argmax
+      token->str
+      (vector (util/now)))
 
- (-> "How much wood would a woodchuck chuck"
-     tokenize
-     logits!
-     argops/argmax
-     token->str
-     (vector (util/now))))
+  (-> "How much wood would a woodchuck chuck"
+      tokenize
+      logits
+      argops/argmax
+      token->str
+      (vector (util/now))))
 
 
 (defn gen-samplef [seed]
-  (raw/llama_set_rng_seed base-llama-ctx seed)
-  (llama/init-mirostat-v2-sampler base-llama-ctx))
-
+  (let [{:keys [llama-ctx]} @*main-context]
+    (raw/llama_set_rng_seed llama-ctx seed)
+    (llama/init-mirostat-v2-sampler llama-ctx)))
 
 (delay
   (let [samplef (gen-samplef 123456)
         logits (-> "How much wood would a woodchuck chuck"
                    tokenize
-                   logits!)]
-    (samplef logits)))
+                   logits)]
+    (untokenize [(samplef logits)])))
