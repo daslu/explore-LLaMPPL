@@ -232,19 +232,19 @@
 
 
 
-;; (delay
-;;   (-> @*state
-;;       :particles
-;;       (tc/map-columns :finished
-;;                       [:x]
-;;                       finished?)
-;;       (tc/map-columns :length
-;;                       [:x]
-;;                       count)
-;;       (tc/map-columns :x
-;;                       [:x]
-;;                       (partial llutil/untokenize
-;;                                llama-ctx))
-;;       #_(tc/drop-columns [:x])
-;;       (tech.v3.dataset.print/print-range :all)
-;;       (tc/write! "/tmp/particles.csv")))
+(delay
+  (-> @*state
+      :particles
+      (tc/map-columns :finished
+                      [:x]
+                      finished?)
+      (tc/map-columns :length
+                      [:x]
+                      count)
+      (tc/map-columns :x
+                      [:x]
+                      context/untokenize)
+      #_(tc/drop-columns [:x])
+      (tech.v3.dataset.print/print-range :all)
+      ((juxt #(tc/write! % "/tmp/particles.csv")
+             identity))))
