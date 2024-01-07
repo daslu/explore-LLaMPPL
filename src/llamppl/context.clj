@@ -79,11 +79,6 @@
                     :or {sub-trie trie
                          path []
                          remaining-tokens tokens}}]
-  #_(-> context
-        (select-keys [:path
-                      :tokens
-                      :remaining-tokens])
-        prn)
   (if (empty? remaining-tokens)
     context
     ;; else
@@ -91,9 +86,6 @@
           rest-tokens (rest remaining-tokens)
           next-step [:children token]
           next-path (concat path next-step)]
-      #_(prn [:DBG
-              {:path path
-               :try (some? (get-in sub-trie next-step))}])
       (if-let [next-sub-trie (get-in sub-trie next-step)]
         (recur (-> context
                    (assoc
