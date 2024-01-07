@@ -14,7 +14,7 @@
 
 (defn get-state [llama-ctx]
   (let [size (raw/llama_get_state_size llama-ctx)
-        _ (prn [:allocating (format "%.2f" (/ size MB)) "MB"])
+        ;; _ (prn [:allocating (format "%.2f" (/ size MB)) "MB"])
         mem (byte-array size)]
     (raw/llama_copy_state_data llama-ctx mem)
     mem))
@@ -121,9 +121,13 @@
                                      (cache/lookup @*llama-state-cache))))
               _ (assert llama-state)
               _ (prn [:EVAL token (untokenize [token])])
+              _ (prn (->> path
+                          (filter number?)
+                          untokenize))
               _ (raw/llama_set_state_data llama-ctx llama-state)
-              _ (llama/llama-update llama-ctx
-                                    token)
+              _ (time
+                 (llama/llama-update llama-ctx
+                                     token))
               _ (swap! *llama-state-cache
                        cache/miss
                        next-llama-state-id (get-state llama-ctx))

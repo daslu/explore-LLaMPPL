@@ -108,7 +108,7 @@
                    :particles []}))
 
 (delay
-  (let [_ (context/init!)
+  (let [_ (context/init! {:threshold 90})
         samplef (context/gen-samplef 12345)
         max-token-length 5
         N 8
