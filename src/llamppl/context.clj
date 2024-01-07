@@ -70,7 +70,10 @@
                        :n-ctx n-ctx})))))
 
 (def *llama-state-cache
-  (atom (cache/lru-cache-factory {} {:threshold 10})))
+  (atom (cache/lru-cache-factory {} {:threshold 2})))
+
+(def *initial-llama-state
+  (atom nil))
 
 (def *id
   (atom 0))
@@ -101,7 +104,7 @@
                                   (or (next-id!)))]
       (if (cache/has? @*llama-state-cache
                       next-llama-state-id)
-        (do (prn :hit next-llama-state-id)
+        (do #_(prn :hit next-llama-state-id)
             (swap! *llama-state-cache
                    cache/hit next-llama-state-id)
             (recur (-> context
@@ -110,10 +113,12 @@
                         :path next-path
                         :remaining-tokens rest-tokens))))
         ;; else
-        (let [llama-state (->> sub-trie
-                               :llama-state-id
-                               (cache/lookup @*llama-state-cache))
-              _ (prn :miss next-llama-state-id)
+        (let [llama-state (if (= path [])
+                            @*initial-llama-state
+                            (do #_(prn :miss next-llama-state-id)
+                                (->> sub-trie
+                                     :llama-state-id
+                                     (cache/lookup @*llama-state-cache))))
               _ (assert llama-state)
               _ (prn [:EVAL token (untokenize [token])])
               _ (raw/llama_set_state_data llama-ctx llama-state)
@@ -131,39 +136,25 @@
                             :remaining-tokens rest-tokens))))))))
 
 
-
-(delay
-  (let [llama-ctx (->llama-ctx)
-        llama-state-id (next-id!)]
-    (llama/llama-update llama-ctx (llama/bos) 0)
-    (reset! *llama-state-cache (cache/lru-cache-factory {}))
-    (swap! *llama-state-cache cache/miss llama-state-id (get-state llama-ctx))
-    (fn []
-      (-> {:llama-ctx llama-ctx
-           :trie {:llama-state-id llama-state-id}
-           :tokens (tokenize "How much wood would a")}
-          cached-eval
-          :sub-trie
-          :logits
-          argops/argmax
-          token->str))))
-
 (defonce *main-context (atom {}))
 
-(defn init! []
-  (reset! *id 0)
-  (let [llama-ctx (->llama-ctx)
-        llama-state-id (next-id!)]
-    (llama/llama-update llama-ctx (llama/bos) 0)
-    (reset! *llama-state-cache (cache/lru-cache-factory {}))
-    (swap! *llama-state-cache cache/miss llama-state-id (get-state llama-ctx))
-    (reset! *main-context
-            {:llama-ctx llama-ctx
-             :trie {:llama-state-id llama-state-id}}))
-  (System/gc))
+(defn init!
+  ([] (init! {}))
+  ([lru-params]
+   (reset! *id 0)
+   (let [llama-ctx (->llama-ctx)
+         llama-state-id (next-id!)]
+     (llama/llama-update llama-ctx (llama/bos) 0)
+     (reset! *llama-state-cache (cache/lru-cache-factory
+                                 {}
+                                 lru-params))
+     (reset! *initial-llama-state (get-state llama-ctx))
+     (reset! *main-context
+             {:llama-ctx llama-ctx
+              :trie {:llama-state-id llama-state-id}}))
+   (System/gc)))
 
 (init!)
-
 
 (defn cached-eval! [tokens]
   (let [context (-> @*main-context
@@ -180,7 +171,7 @@
       :logits))
 
 (delay
-  (init!)
+  (init! {:threshold 2})
 
   (-> "How much wood would a"
       tokenize
