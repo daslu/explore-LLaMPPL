@@ -4,12 +4,17 @@
             [com.phronemophobic.llama.raw :as raw]
             [com.phronemophobic.llama.util :as llutil]
             [tech.v3.datatype.argops :as argops]
-            [llamppl.util :as util]))
+            [llamppl.util :as util]
+            [clojure.math :as math]))
 
 (defonce llama7b-path "/workspace/models/llama-2-7b-chat.ggmlv3.q4_0.bin")
 
+(def MB (math/pow 2 20))
+
 (defn get-state [llama-ctx]
-  (let [mem (byte-array (raw/llama_get_state_size llama-ctx))]
+  (let [size (raw/llama_get_state_size llama-ctx)
+        _ (prn [:allocating (format "%.2f" (/ size MB)) "MB"])
+        mem (byte-array size)]
     (raw/llama_copy_state_data llama-ctx mem)
     mem))
 
