@@ -5,7 +5,8 @@
             [com.phronemophobic.llama.util :as llutil]
             [tech.v3.datatype.argops :as argops]
             [llamppl.util :as util]
-            [clojure.math :as math]))
+            [clojure.math :as math]
+            [clojure.core.cache :as cache]))
 
 (defonce llama7b-path "/workspace/models/llama-2-7b-chat.ggmlv3.q4_0.bin")
 
@@ -68,6 +69,14 @@
                        :n-new n-new
                        :n-ctx n-ctx})))))
 
+(def *llama-state-cache
+  (atom (cache/lru-cache-factory {} {:threshold 10})))
+
+(def *id
+  (atom 0))
+
+(defn next-id! []
+  (swap! *id inc))
 
 (defn cached-eval [{:as context
                     :keys [llama-ctx
@@ -85,21 +94,36 @@
     (let [token (first remaining-tokens)
           rest-tokens (rest remaining-tokens)
           next-step [:children token]
-          next-path (concat path next-step)]
-      (if-let [next-sub-trie (get-in sub-trie next-step)]
-        (recur (-> context
-                   (assoc
-                    :sub-trie next-sub-trie
-                    :path next-path
-                    :remaining-tokens rest-tokens)))
+          next-path (concat path next-step)
+          next-sub-trie (get-in sub-trie next-step)
+          next-llama-state-id (-> next-sub-trie
+                                  :llama-state-id
+                                  (or (next-id!)))]
+      (if (cache/has? @*llama-state-cache
+                      next-llama-state-id)
+        (do (prn :hit next-llama-state-id)
+            (swap! *llama-state-cache
+                   cache/hit next-llama-state-id)
+            (recur (-> context
+                       (assoc
+                        :sub-trie next-sub-trie
+                        :path next-path
+                        :remaining-tokens rest-tokens))))
         ;; else
-        (let [_ (prn [:EVAL token (untokenize [token])])
-              _ (raw/llama_set_state_data llama-ctx
-                                          (:llama-state sub-trie))
+        (let [llama-state (->> sub-trie
+                               :llama-state-id
+                               (cache/lookup @*llama-state-cache))
+              _ (prn :miss next-llama-state-id)
+              _ (assert llama-state)
+              _ (prn [:EVAL token (untokenize [token])])
+              _ (raw/llama_set_state_data llama-ctx llama-state)
               _ (llama/llama-update llama-ctx
                                     token)
+              _ (swap! *llama-state-cache
+                       cache/miss
+                       next-llama-state-id (get-state llama-ctx))
               new-sub-trie {:logits (llama/get-logits llama-ctx)
-                            :llama-state (get-state llama-ctx)}]
+                            :llama-state-id next-llama-state-id}]
           (recur (-> context
                      (update :trie assoc-in next-path new-sub-trie)
                      (assoc :sub-trie new-sub-trie
@@ -109,29 +133,36 @@
 
 
 (delay
-  (let [llama-ctx (->llama-ctx)]
+  (let [llama-ctx (->llama-ctx)
+        llama-state-id (next-id!)]
     (llama/llama-update llama-ctx (llama/bos) 0)
-    (-> {:llama-ctx llama-ctx
-         :trie {:llama-state (get-state llama-ctx)}
-         :tokens (tokenize "How much wood would a")}
-        cached-eval
-        :sub-trie
-        :logits
-        argops/argmax
-        token->str)))
+    (reset! *llama-state-cache (cache/lru-cache-factory {}))
+    (swap! *llama-state-cache cache/miss llama-state-id (get-state llama-ctx))
+    (fn []
+      (-> {:llama-ctx llama-ctx
+           :trie {:llama-state-id llama-state-id}
+           :tokens (tokenize "How much wood would a")}
+          cached-eval
+          :sub-trie
+          :logits
+          argops/argmax
+          token->str))))
 
 (defonce *main-context (atom {}))
 
 (defn init! []
-  (let [llama-ctx (->llama-ctx)]
+  (reset! *id 0)
+  (let [llama-ctx (->llama-ctx)
+        llama-state-id (next-id!)]
     (llama/llama-update llama-ctx (llama/bos) 0)
+    (reset! *llama-state-cache (cache/lru-cache-factory {}))
+    (swap! *llama-state-cache cache/miss llama-state-id (get-state llama-ctx))
     (reset! *main-context
             {:llama-ctx llama-ctx
-             :trie {:llama-state (get-state llama-ctx)}}))
+             :trie {:llama-state-id llama-state-id}}))
   (System/gc))
 
 (init!)
-
 
 
 (defn cached-eval! [tokens]
