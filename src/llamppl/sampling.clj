@@ -108,10 +108,10 @@
                    :particles []}))
 
 (delay
-  (let [_ (context/init! {:threshold 90})
-        samplef (context/gen-samplef 12345)
+  (let [_ (context/init! {:threshold 70})
+        samplef (context/gen-samplef 123456)
         max-token-length 5
-        N 8
+        N 15
         K 3
         s0 (context/tokenize "The Fed says")
         initial-N 20]
@@ -246,5 +246,5 @@
                       context/untokenize)
       #_(tc/drop-columns [:x])
       (tech.v3.dataset.print/print-range :all)
-      ((juxt #(tc/write! % "/tmp/particles.csv")
+      ((juxt #(tc/write! % "/tmp/particles2.csv")
              identity))))
