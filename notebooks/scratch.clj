@@ -163,11 +163,11 @@
 
 (delay
   (let [max-token-length 5
-        N 20
+        N 100
         K 3
         s0 (->> "The Fed says"
                 (llutil/tokenize llama-context))
-        samplef (gen-samplef 12345)
+        samplef (gen-samplef 123456)
         initial-N 20]
     (swap! *state
            assoc :particles  (tc/dataset {:x (repeat initial-N s0)
@@ -294,11 +294,20 @@
                       finished?)
       (tc/map-columns :length
                       [:x]
-                      count)
-      (tc/map-columns :x
-                      [:x]
-                      (partial llutil/untokenize
-                               llama-context))
+                      count) (tc/map-columns :x
+                                             [:x]
+                                             (partial llutil/untokenize
+                                                      llama-context))
       #_(tc/drop-columns [:x])
       (tech.v3.dataset.print/print-range :all)
-      (tc/write! "/tmp/particles.csv")))
+      ((juxt identity
+             #(tc/write! % "/tmp/particles.csv")))))
+
+(comment
+  (-> "/tmp/particles.csv"
+      (tc/dataset {:key-fn keyword})
+      :finished
+      frequencies))
+
+(java.util.Date.)
+;; #inst "2023-12-16T22:22:34.961-00:00"
