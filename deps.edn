@@ -4,4 +4,4 @@
         org.scicloj/noj {:mvn/version "1-alpha22"}
         org.clojure/core.cache {:mvn/version "1.0.225"}}
  :aliases {:local-llama {:jvm-opts ["-Djna.library.path=/workspace/clones/llama.cpp/build"
-                                    "-Xmx25g"]}}}
+                                    "-Xmx60g"]}}}

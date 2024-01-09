@@ -108,13 +108,13 @@
                    :particles []}))
 
 (delay
-  (let [_ (context/init! {:threshold 70})
-        samplef (context/gen-samplef 123456)
+  (let [_ (context/init! {:threshold 30})
+        samplef (context/gen-samplef 123)
         max-token-length 5
         N 15
         K 3
         s0 (context/tokenize "The Fed says")
-        initial-N 20]
+        initial-N 5]
     (swap! *state
            assoc :particles  (tc/dataset {:x (repeat initial-N s0)
                                           :w 1
@@ -231,7 +231,6 @@
             (recur (inc gen))))))))
 
 
-
 (delay
   (-> @*state
       :particles
@@ -246,5 +245,5 @@
                       context/untokenize)
       #_(tc/drop-columns [:x])
       (tech.v3.dataset.print/print-range :all)
-      ((juxt #(tc/write! % "/tmp/particles2.csv")
+      ((juxt #(tc/write! % "/tmp/particles3.csv")
              identity))))
