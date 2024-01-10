@@ -107,14 +107,16 @@
 (def *state (atom {:stop false
                    :particles []}))
 
-(delay
-  (let [_ (context/init! {:threshold 30})
-        samplef (context/gen-samplef 123)
-        max-token-length 5
-        N 15
-        K 3
-        s0 (context/tokenize "The Fed says")
-        initial-N 5]
+(defn run! [{:keys [cache-threshold
+                    seed
+                    max-token-length
+                    N
+                    K
+                    base-text
+                    initial-N]}]
+  (let [_ (context/init! {:threshold cache-threshold})
+        samplef (context/gen-samplef seed)
+        s0 (context/tokenize base-text)]
     (swap! *state
            assoc :particles  (tc/dataset {:x (repeat initial-N s0)
                                           :w 1
@@ -229,6 +231,21 @@
             (swap! *state
                    assoc :particles new-particles)
             (recur (inc gen))))))))
+
+
+
+
+(delay
+  (run!
+   {:cache-threshold 30
+    :seed 1
+    :base-text "The Fed says"
+    :max-token-length 5
+    :N 15
+    :K 3
+    :initial-N 5}))
+
+
 
 
 (delay
