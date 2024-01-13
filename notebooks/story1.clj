@@ -13,7 +13,10 @@
             [tech.v3.datatype.argops :as argops]
             [clojure.math :as math]
             [clojure.core.cache :as cache]
-            [scicloj.kindly.v4.kind :as kind]))
+            [scicloj.kindly.v4.kind :as kind]
+            [scicloj.noj.v1.vis.hanami :as hanami]
+            [aerial.hanami.templates :as ht]
+            [tablecloth.api :as tc]))
 
 ;; This notebook demonstrates a Clojure implementation of a specifica case of LLaMPPL.
 ;; Specifically, we explore the "Hard Constraints" case from
@@ -46,6 +49,7 @@
 (defn tokenize [text]
   (llutil/tokenize base-llama-ctx text))
 
+;; Example:
 (delay
   (-> "The Fed says"
       tokenize))
@@ -54,6 +58,7 @@
 (defn untokenize [tokens]
   (llutil/untokenize base-llama-ctx tokens))
 
+;; Example:
 (delay
   (-> "The Fed says"
       tokenize
@@ -69,6 +74,7 @@
                             untoken)))
         (range 0 Integer/MAX_VALUE)))
 
+;; Example:
 (delay
   (->> "The Fed says"
        tokenize
@@ -77,6 +83,7 @@
 ;; The EOS (end-of-sentence) token:
 (def llama-eos (llama/eos base-llama-ctx))
 
+;; Example:
 ;; Getting next-token logits for a given sequence of tokens.
 (delay
   (let [llama-ctx (->llama-ctx)]
@@ -86,7 +93,19 @@
         vec
         kind/portal)))
 
-;; Getting the mosty probably next-token:
+(delay
+  (let [llama-ctx (->llama-ctx)]
+    (-> llama-ctx
+        (llama/llama-update "What is the")
+        llama/get-logits
+        (->> (hash-map :logit))
+        tc/dataset
+        (hanami/histogram :logit {:nbins 100})
+        (assoc-in [:encoding :x :title] :logit)
+        (assoc :height 200))))
+
+;; Example:
+;; Getting the most probable next-token:
 (delay
   (let [llama-ctx (->llama-ctx)]
     (-> llama-ctx
@@ -95,18 +114,37 @@
         argops/argmax
         token->str)))
 
-;; Get a copy of a given model's context
+;; A function to get a copy of a given model-context's state
 ;; (so that we can reuse the KV-cache):
-(defn get-state [llama-ctx]
+(defn ctx->state-data [llama-ctx]
   (let [size (raw/llama_get_state_size llama-ctx)
-        ;; _ (prn [:allocating (format "%.2f" (/ size MB)) "MB"])
         mem (byte-array size)]
     (raw/llama_copy_state_data llama-ctx mem)
     mem))
 
+;; How big is this state?
 (delay
   (let [llama-ctx (->llama-ctx)]
     (-> llama-ctx
         (llama/llama-update "What is the")
-        get-state
-        count)))
+        ctx->state-data
+        count
+        (/ MB)
+        (->> (format "%.02f MB")))))
+
+;; A function to recreate a model-cotext from its state.
+(defn state-data->ctx [state-data]
+  (let [llama-ctx (->llama-ctx)]
+    (raw/llama_set_state_data llama-ctx state-data)
+    llama-ctx))
+
+;; Example:
+;; Retrieve the state and reuse it.
+(delay
+  (-> (->llama-ctx)
+      (llama/llama-update "What is the")
+      ctx->state-data
+      state-data->ctx
+      llama/get-logits
+      argops/argmax
+      token->str))
