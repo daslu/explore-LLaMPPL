@@ -2,4 +2,4 @@
   .
   ((cider-clojure-cli-aliases
     .
-    "local-llama"))))
+    "dev:local-llama"))))
