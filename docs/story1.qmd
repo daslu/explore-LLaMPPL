@@ -1,0 +1,222 @@
+
+---
+format:
+  html:
+    toc: true
+    toc-depth: 4
+    theme: [spacelab, notebooks/custom.scss]
+    output-file: story1.html
+highlight-style: solarized
+code-block-background: true
+include-in-header: {text: '<link rel = "icon" href = "data:," />'}
+title: 'LLaMPPL in a special case: limiting token length'
+
+---
+<style></style><style>.printedClojure .sourceCode {
+  background-color: transparent;
+  border-style: none;
+}
+</style>
+<script src="story1_files/md-default0.js" type="text/javascript"></script><script src="story1_files/md-default1.js" type="text/javascript"></script>
+
+::: {.sourceClojure}
+```clojure
+^{:clay {:quarto {:format {:html {:toc true
+                                  :toc-depth 4
+                                  :theme [:spacelab "notebooks/custom.scss"]}}
+                  :highlight-style :solarized
+                  :code-block-background true
+                  :include-in-header {:text "<link rel = \"icon\" href = \"data:,\" />"}
+                  :title "LLaMPPL in a special case: limiting token length"}}}
+(ns story1
+  (:require [tech.v3.datatype :as dtype]
+            [com.phronemophobic.llama :as llama]
+            [com.phronemophobic.llama.raw :as raw]
+            [com.phronemophobic.llama.util :as llutil]
+            [tech.v3.datatype.argops :as argops]
+            [clojure.math :as math]
+            [clojure.core.cache :as cache]))
+```
+:::
+
+
+This notebook demonstrates a Clojure implementation of a specifica case of LLaMPPL.
+Specifically, we explore the "Hard Constraints" case from
+[Sequential Monte Carlo Steering of Large Language Models using Probabilistic Programs](https://arxiv.org/abs/2306.03081)
+by Alexander K. Lew, Tan Zhi-Xuan, Gabriel Grand, Vikash K. Mansinghka
+(see Figure 1 and Subsection 2.2).
+
+## Constants
+Path to the LLM:
+
+
+::: {.sourceClojure}
+```clojure
+(def llama7b-path (str (System/getenv "MODELS_PATH")
+                       "/llama-2-7b-chat.ggmlv3.q4_0.bin"))
+```
+:::
+
+
+One megabyte:
+
+
+::: {.sourceClojure}
+```clojure
+(def MB (math/pow 2 20))
+```
+:::
+
+
+
+## Using llama.clj
+Create a new model context:
+
+
+::: {.sourceClojure}
+```clojure
+(defn ->llama-ctx []
+  (llama/create-context llama7b-path {}))
+```
+:::
+
+
+A copy of an empty model
+(to extract basic information):
+
+
+::: {.sourceClojure}
+```clojure
+(def base-llama-ctx
+  (->llama-ctx))
+```
+:::
+
+
+A function to turn a String of text to a list of tokens:
+
+
+::: {.sourceClojure}
+```clojure
+(defn tokenize [text]
+  (llutil/tokenize base-llama-ctx text))
+```
+:::
+
+
+
+::: {.sourceClojure}
+```clojure
+(delay
+  (-> "The Fed says"
+      tokenize))
+```
+:::
+
+
+
+::: {.printedClojure}
+```clojure
+[1576 17972 4083]
+
+```
+:::
+
+
+A function to turn a list of tokens to a String of text:
+
+
+::: {.sourceClojure}
+```clojure
+(defn untokenize [tokens]
+  (llutil/untokenize base-llama-ctx tokens))
+```
+:::
+
+
+
+::: {.sourceClojure}
+```clojure
+(delay
+  (-> "The Fed says"
+      tokenize
+      untokenize))
+```
+:::
+
+
+
+::: {.printedClojure}
+```clojure
+"The Fed says"
+
+```
+:::
+
+
+A map from tokens to the corresponding strings:
+
+
+::: {.sourceClojure}
+```clojure
+(def token->str
+  (into (sorted-map)
+        (comp (map
+               (fn [token]
+                 [token (raw/llama_token_to_str base-llama-ctx token)]))
+              (take-while (fn [[token untoken]]
+                            untoken)))
+        (range 0 Integer/MAX_VALUE)))
+```
+:::
+
+
+
+::: {.sourceClojure}
+```clojure
+(delay
+  (->> "The Fed says"
+       tokenize
+       (map token->str)))
+```
+:::
+
+
+
+::: {.printedClojure}
+```clojure
+("The" " Fed" " says")
+
+```
+:::
+
+
+The EOS (end-of-sentence) token:
+
+
+::: {.sourceClojure}
+```clojure
+(def llama-eos (llama/eos base-llama-ctx))
+```
+:::
+
+
+Get a copy of a given model's context
+(so that we can reuse the KV-cache):
+
+
+::: {.sourceClojure}
+```clojure
+(defn get-state [llama-ctx]
+  (let [size (raw/llama_get_state_size llama-ctx)
+        ;; _ (prn [:allocating (format "%.2f" (/ size MB)) "MB"])
+        mem (byte-array size)]
+    (raw/llama_copy_state_data llama-ctx mem)
+    mem))
+```
+:::
+
+
+<div style="background-color:grey;height:2px;width:100%;"></div>
+
+<div><pre><small><small>source: <a href="https://github.com/daslu/explore-LLaMPPL/blob/main/notebooks/story1.clj">notebooks/story1.clj</a></small></small></pre></div>
