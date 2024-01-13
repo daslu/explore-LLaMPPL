@@ -18,8 +18,8 @@
             [aerial.hanami.templates :as ht]
             [tablecloth.api :as tc]))
 
-;; WIP
-
+;; **WIP**
+;;
 ;; This notebook demonstrates a Clojure implementation of a specifica case of LLaMPPL.
 ;; Specifically, we explore the "Hard Constraints" case from
 ;; [Sequential Monte Carlo Steering of Large Language Models using Probabilistic Programs](https://arxiv.org/abs/2306.03081)
@@ -103,7 +103,6 @@
         (->> (hash-map :logit))
         tc/dataset
         (hanami/histogram :logit {:nbins 100})
-        (assoc-in [:encoding :x :title] :logit)
         (assoc :height 200))))
 
 ;; Example:
