@@ -6,3 +6,7 @@ exploring the [LLaMPPL](https://arxiv.org/abs/2306.03081) underlying algorithms 
 ## Status
 An ad-hoc example seems to be working, but is very slow.
 The current challenge is exploring performance before we tidy up and generalize the code.
+
+## Notebooks
+
+[Story 1 - LLaMPPL in a special case: limiting token length](daslu.github.io/explore-LLamPPL/story1.html)
