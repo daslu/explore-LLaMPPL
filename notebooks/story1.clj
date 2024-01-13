@@ -12,7 +12,8 @@
             [com.phronemophobic.llama.util :as llutil]
             [tech.v3.datatype.argops :as argops]
             [clojure.math :as math]
-            [clojure.core.cache :as cache]))
+            [clojure.core.cache :as cache]
+            [scicloj.kindly.v4.kind :as kind]))
 
 ;; This notebook demonstrates a Clojure implementation of a specifica case of LLaMPPL.
 ;; Specifically, we explore the "Hard Constraints" case from
@@ -76,6 +77,24 @@
 ;; The EOS (end-of-sentence) token:
 (def llama-eos (llama/eos base-llama-ctx))
 
+;; Getting next-token logits for a given sequence of tokens.
+(delay
+  (let [llama-ctx (->llama-ctx)]
+    (-> llama-ctx
+        (llama/llama-update "What is the")
+        llama/get-logits
+        vec
+        kind/portal)))
+
+;; Getting the mosty probably next-token:
+(delay
+  (let [llama-ctx (->llama-ctx)]
+    (-> llama-ctx
+        (llama/llama-update "What is the")
+        llama/get-logits
+        argops/argmax
+        token->str)))
+
 ;; Get a copy of a given model's context
 ;; (so that we can reuse the KV-cache):
 (defn get-state [llama-ctx]
@@ -84,3 +103,10 @@
         mem (byte-array size)]
     (raw/llama_copy_state_data llama-ctx mem)
     mem))
+
+(delay
+  (let [llama-ctx (->llama-ctx)]
+    (-> llama-ctx
+        (llama/llama-update "What is the")
+        get-state
+        count)))
