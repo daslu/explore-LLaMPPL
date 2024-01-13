@@ -9,4 +9,4 @@ The current challenge is exploring performance before we tidy up and generalize 
 
 ## Notebooks
 
-[Story 1 - LLaMPPL in a special case: limiting token length](daslu.github.io/explore-LLamPPL/story1.html)
+[Story 1 - LLaMPPL in a special case: limiting token length](https://daslu.github.io/explore-LLaMPPL//story1)
