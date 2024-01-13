@@ -4,5 +4,6 @@
                   :highlight-style :solarized
                   :code-block-background true
                   :include-in-header {:text "<link rel = \"icon\" href = \"data:,\" />"}
-                  :title "exploring LLaMPPL in Clojure"}}}
+                  :title "exploring LLaMPPL in Clojure"}}
+  :kindly/hide-code true}
 (ns index)
