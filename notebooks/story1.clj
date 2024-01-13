@@ -18,6 +18,8 @@
             [aerial.hanami.templates :as ht]
             [tablecloth.api :as tc]))
 
+;; WIP
+
 ;; This notebook demonstrates a Clojure implementation of a specifica case of LLaMPPL.
 ;; Specifically, we explore the "Hard Constraints" case from
 ;; [Sequential Monte Carlo Steering of Large Language Models using Probabilistic Programs](https://arxiv.org/abs/2306.03081)
