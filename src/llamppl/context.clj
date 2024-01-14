@@ -46,17 +46,6 @@
   (-> details
       (assoc :children {})))
 
-(defn get-token [trie token]
-  (-> trie
-      :children
-      token))
-
-(defn add-token [trie token details]
-  (-> trie
-      (assoc-in [:children token]
-                (-> details
-                    (assoc :parent trie)))))
-
 (defn check-cache-size [kv-index
                         n-new
                         llama-ctx]
