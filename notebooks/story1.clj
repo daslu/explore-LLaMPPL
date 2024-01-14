@@ -13,18 +13,24 @@
             [tech.v3.datatype.argops :as argops]
             [clojure.math :as math]
             [clojure.core.cache :as cache]
+            [clojure.core.cache.wrapped :as cache.wrapped]
             [scicloj.kindly.v4.kind :as kind]
+            [scicloj.kindly.v4.api :as kindly]
             [scicloj.noj.v1.vis.hanami :as hanami]
             [aerial.hanami.templates :as ht]
             [tablecloth.api :as tc]))
 
-;; **WIP**
-;;
-;; This notebook demonstrates a Clojure implementation of a specifica case of LLaMPPL.
-;; Specifically, we explore the "Hard Constraints" case from
-;; [Sequential Monte Carlo Steering of Large Language Models using Probabilistic Programs](https://arxiv.org/abs/2306.03081)
-;; by Alexander K. Lew, Tan Zhi-Xuan, Gabriel Grand, Vikash K. Mansinghka
-;; (see Figure 1 and Subsection 2.2).
+(def md
+  (comp kindly/hide-code kind/md))
+
+(md
+ "**WIP**
+
+This notebook demonstrates a Clojure implementation of a specifica case of LLaMPPL.
+Specifically, we explore the \"Hard Constraints\" case from
+[Sequential Monte Carlo Steering of Large Language Models using Probabilistic Programs](https://arxiv.org/abs/2306.03081)
+by Alexander K. Lew, Tan Zhi-Xuan, Gabriel Grand, Vikash K. Mansinghka
+(see Figure 1 and Subsection 2.2).")
 
 ;; ## Constants
 
@@ -37,6 +43,8 @@
 
 
 ;; ## Using llama.clj
+
+(md "We will use [llama.clj](https://github.com/phronmophobic/llama.clj), a Clojure wrapper of llama.cpp.")
 
 ;; Create a new model context:
 (defn ->llama-ctx []
@@ -88,22 +96,20 @@
 ;; Example:
 ;; Getting next-token logits for a given sequence of tokens.
 (delay
-  (let [llama-ctx (->llama-ctx)]
-    (-> llama-ctx
-        (llama/llama-update "What is the")
-        llama/get-logits
-        vec
-        kind/portal)))
+  (-> (->llama-ctx)
+      (llama/llama-update "What is the") ; Note this is **mutating** the context
+      llama/get-logits
+      vec
+      kind/portal))
 
 (delay
-  (let [llama-ctx (->llama-ctx)]
-    (-> llama-ctx
-        (llama/llama-update "What is the")
-        llama/get-logits
-        (->> (hash-map :logit))
-        tc/dataset
-        (hanami/histogram :logit {:nbins 100})
-        (assoc :height 200))))
+  (-> (->llama-ctx)
+      (llama/llama-update "What is the")
+      llama/get-logits
+      (->> (hash-map :logit))
+      tc/dataset
+      (hanami/histogram :logit {:nbins 100})
+      (assoc :height 200)))
 
 ;; Example:
 ;; Getting the most probable next-token:
@@ -115,8 +121,10 @@
         argops/argmax
         token->str)))
 
+;; ## Keeping and retrieving context state
+
 ;; A function to get a copy of a given model-context's state
-;; (so that we can reuse the KV-cache):
+;; (so that we can reuse the KV-cache later):
 (defn ctx->state-data [llama-ctx]
   (let [size (raw/llama_get_state_size llama-ctx)
         mem (byte-array size)]
@@ -125,13 +133,12 @@
 
 ;; How big is this state?
 (delay
-  (let [llama-ctx (->llama-ctx)]
-    (-> llama-ctx
-        (llama/llama-update "What is the")
-        ctx->state-data
-        count
-        (/ MB)
-        (->> (format "%.02f MB")))))
+  (-> (->llama-ctx)
+      (llama/llama-update "What is the")
+      ctx->state-data
+      count
+      (/ MB)
+      (->> (format "%.02f MB"))))
 
 ;; A function to recreate a model-cotext from its state.
 (defn state-data->ctx [state-data]
@@ -140,7 +147,7 @@
     llama-ctx))
 
 ;; Example:
-;; Retrieve the state and reuse it.
+;; Keep, retrieve, and reuse the state
 (delay
   (-> (->llama-ctx)
       (llama/llama-update "What is the")
@@ -149,3 +156,19 @@
       llama/get-logits
       argops/argmax
       token->str))
+
+;; ## An LRU cache for context states
+(def *id
+  (atom 0))
+
+(defn next-id! []
+  (swap! *id inc))
+
+(let [state-data-cache (cache/lru-cache-factory
+                        {}
+                        {:threshold 5})]
+  )
+
+
+;; ## A token-trie cache
+;; (Section 3, Subsection "Shared Transformer cache" in the paper)
