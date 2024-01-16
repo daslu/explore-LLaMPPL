@@ -1,10 +1,4 @@
-^{:clay {:quarto {:format {:html {:toc true
-                                  :toc-depth 4
-                                  :theme [:spacelab "notebooks/custom.scss"]}}
-                  :highlight-style :solarized
-                  :code-block-background true
-                  :include-in-header {:text "<link rel = \"icon\" href = \"data:,\" />"}
-                  :title "LLaMPPL in a special case: limiting token length"}}}
+^{:clay {:quarto {:title "LLaMPPL in a special case: limiting token length"}}}
 (ns story1
   (:require [tech.v3.datatype :as dtype]
             [com.phronemophobic.llama :as llama]
