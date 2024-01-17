@@ -158,32 +158,37 @@ by Alexander K. Lew, Tan Zhi-Xuan, Gabriel Grand, Vikash K. Mansinghka
       token->str))
 
 ;; ## An LRU cache for context states
-(def *id
-  (atom 0))
-
-(defn next-id! []
-  (swap! *id inc))
-
 (def *state-data-cache
   (cache.wrapped/lru-cache-factory
    {}
    {:threshold 5}))
 
-(defn cache-state-data! [{:keys [state-data-id state-data-fn]
-                          :or {state-data-fn (next-id!)}}]
-  {:state-data-id state-data-id
-   :state-data (cache.wrapped/lookup-or-miss
-                *state-data-cache
-                state-data-id
-                state-data-fn)})
+(def cache-state-data!
+  (let [*id (atom 0)]
+    (fn [{:keys [state-data-id
+                 state-data-fn]
+          :or {state-data-id (swap! *id inc)}}]
+      {:state-data-id state-data-id
+       :state-data (cache.wrapped/lookup-or-miss
+                    *state-data-cache
+                    state-data-id
+                    state-data-fn)})))
 
 ;; Let us try it out:
 (delay
-  (let [{:keys [state-data-id
+  (let [;; Compute state data and keep it in the cache.
+        {:keys [state-data-id
                 state-data]} (cache-state-data!
                               {:state-data-fn (fn [_]
                                                 (text->state-data
                                                  "What is the"))})
+        ;; Use the cache a few more times.
+        _ (dotimes [i 3]
+            (cache-state-data!
+             {:state-data-fn (fn [_]
+                               (text->state-data
+                                (str "What is " i)))}))
+        ;; Retrieve our state data.
         retrieved-state-data (-> {:state-data-id state-data-id}
                                  cache-state-data!
                                  :state-data)]
