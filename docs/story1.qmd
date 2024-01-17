@@ -329,7 +329,7 @@ How big is this state?
 :::
 
 
-A function to recreate a model-cotext from its state.
+A function to recreate a model-cotext from its state:
 
 
 ::: {.sourceClojure}
@@ -342,6 +342,20 @@ A function to recreate a model-cotext from its state.
 :::
 
 
+A function to turn a piece of text to the corresponding
+model state data:
+
+
+::: {.sourceClojure}
+```clojure
+(defn text->state-data [text]
+  (-> (->llama-ctx)
+      (llama/llama-update text)
+      ctx->state-data))
+```
+:::
+
+
 Example:
 Keep, retrieve, and reuse the state
 
@@ -349,9 +363,8 @@ Keep, retrieve, and reuse the state
 ::: {.sourceClojure}
 ```clojure
 (delay
-  (-> (->llama-ctx)
-      (llama/llama-update "What is the")
-      ctx->state-data
+  (-> "What is the"
+      text->state-data
       state-data->ctx
       llama/get-logits
       argops/argmax
@@ -375,8 +388,10 @@ Keep, retrieve, and reuse the state
 
 ::: {.sourceClojure}
 ```clojure
-(def *id
-  (atom 0))
+(def *state-data-cache
+  (cache.wrapped/lru-cache-factory
+   {}
+   {:threshold 5}))
 ```
 :::
 
@@ -384,19 +399,45 @@ Keep, retrieve, and reuse the state
 
 ::: {.sourceClojure}
 ```clojure
-(defn next-id! []
-  (swap! *id inc))
+(def cache-state-data!
+  (let [*id (atom 0)]
+    (fn [{:keys [state-data-id
+                 state-data-fn]
+          :or {state-data-id (swap! *id inc)}}]
+      {:state-data-id state-data-id
+       :state-data (cache.wrapped/lookup-or-miss
+                    *state-data-cache
+                    state-data-id
+                    state-data-fn)})))
 ```
 :::
 
 
+Let us try it out:
+
 
 ::: {.sourceClojure}
 ```clojure
-(let [state-data-cache (cache/lru-cache-factory
-                        {}
-                        {:threshold 5})]
-  )
+(delay
+  (let [;; Compute state data and keep it in the cache.
+        {:keys [state-data-id
+                state-data]} (cache-state-data!
+                              {:state-data-fn (fn [_]
+                                                (text->state-data
+                                                 "What is the"))})
+        ;; Use the cache a few more times.
+        _ (dotimes [i 3]
+            (cache-state-data!
+             {:state-data-fn (fn [_]
+                               (text->state-data
+                                (str "What is " i)))}))
+        ;; Retrieve our state data.
+        retrieved-state-data (-> {:state-data-id state-data-id}
+                                 cache-state-data!
+                                 :state-data)]
+    (java.util.Arrays/equals
+     ^bytes state-data
+     ^bytes retrieved-state-data)))
 ```
 :::
 
@@ -404,7 +445,7 @@ Keep, retrieve, and reuse the state
 
 ::: {.printedClojure}
 ```clojure
-nil
+true
 
 ```
 :::
