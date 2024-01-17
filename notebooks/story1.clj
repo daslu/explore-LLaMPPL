@@ -134,18 +134,24 @@ by Alexander K. Lew, Tan Zhi-Xuan, Gabriel Grand, Vikash K. Mansinghka
       (/ MB)
       (->> (format "%.02f MB"))))
 
-;; A function to recreate a model-cotext from its state.
+;; A function to recreate a model-cotext from its state:
 (defn state-data->ctx [state-data]
   (let [llama-ctx (->llama-ctx)]
     (raw/llama_set_state_data llama-ctx state-data)
     llama-ctx))
 
+;; A function to turn a piece of text to the corresponding
+;; model state data:
+(defn text->state-data [text]
+  (-> (->llama-ctx)
+      (llama/llama-update text)
+      ctx->state-data))
+
 ;; Example:
 ;; Keep, retrieve, and reuse the state
 (delay
-  (-> (->llama-ctx)
-      (llama/llama-update "What is the")
-      ctx->state-data
+  (-> "What is the"
+      text->state-data
       state-data->ctx
       llama/get-logits
       argops/argmax
@@ -158,10 +164,32 @@ by Alexander K. Lew, Tan Zhi-Xuan, Gabriel Grand, Vikash K. Mansinghka
 (defn next-id! []
   (swap! *id inc))
 
-(let [state-data-cache (cache/lru-cache-factory
-                        {}
-                        {:threshold 5})]
-  )
+(def *state-data-cache
+  (cache.wrapped/lru-cache-factory
+   {}
+   {:threshold 5}))
+
+(defn cache-state-data! [{:keys [state-data-id state-data-fn]
+                          :or {state-data-fn (next-id!)}}]
+  {:state-data-id state-data-id
+   :state-data (cache.wrapped/lookup-or-miss
+                *state-data-cache
+                state-data-id
+                state-data-fn)})
+
+;; Let us try it out:
+(delay
+  (let [{:keys [state-data-id
+                state-data]} (cache-state-data!
+                              {:state-data-fn (fn [_]
+                                                (text->state-data
+                                                 "What is the"))})
+        retrieved-state-data (-> {:state-data-id state-data-id}
+                                 cache-state-data!
+                                 :state-data)]
+    (java.util.Arrays/equals
+     ^bytes state-data
+     ^bytes retrieved-state-data)))
 
 
 ;; ## A token-trie cache
