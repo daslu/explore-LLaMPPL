@@ -22,7 +22,9 @@
 
 This notebook demonstrates a Clojure implementation of a specifica case of LLaMPPL.
 Specifically, we explore the \"Hard Constraints\" case from
+
 [Sequential Monte Carlo Steering of Large Language Models using Probabilistic Programs](https://arxiv.org/abs/2306.03081)
+
 by Alexander K. Lew, Tan Zhi-Xuan, Gabriel Grand, Vikash K. Mansinghka
 (see Figure 1 and Subsection 2.2).")
 
@@ -93,8 +95,7 @@ by Alexander K. Lew, Tan Zhi-Xuan, Gabriel Grand, Vikash K. Mansinghka
   (-> (->llama-ctx)
       (llama/llama-update "What is the") ; Note this is **mutating** the context
       llama/get-logits
-      vec
-      kind/portal))
+      (->> (take 5))))
 
 (delay
   (-> (->llama-ctx)
@@ -161,18 +162,18 @@ by Alexander K. Lew, Tan Zhi-Xuan, Gabriel Grand, Vikash K. Mansinghka
 (def *state-data-cache
   (cache.wrapped/lru-cache-factory
    {}
-   {:threshold 5}))
+   {:threshold 20}))
 
 (def cache-state-data!
   (let [*id (atom 0)]
     (fn [{:keys [state-data-id
-                 state-data-fn]
-          :or {state-data-id (swap! *id inc)}}]
-      {:state-data-id state-data-id
-       :state-data (cache.wrapped/lookup-or-miss
-                    *state-data-cache
-                    state-data-id
-                    state-data-fn)})))
+                 state-data-fn]}]
+      (let [id (or state-data-id (swap! *id inc))]
+        {:state-data-id id
+         :state-data (cache.wrapped/lookup-or-miss
+                      *state-data-cache
+                      id
+                      state-data-fn)}))))
 
 ;; Let us try it out:
 (delay
@@ -188,10 +189,11 @@ by Alexander K. Lew, Tan Zhi-Xuan, Gabriel Grand, Vikash K. Mansinghka
              {:state-data-fn (fn [_]
                                (text->state-data
                                 (str "What is " i)))}))
-        ;; Retrieve our state data.
+        ;; Retrieve our state data from the first call.
         retrieved-state-data (-> {:state-data-id state-data-id}
                                  cache-state-data!
                                  :state-data)]
+    ;; Make sure it is equals.
     (java.util.Arrays/equals
      ^bytes state-data
      ^bytes retrieved-state-data)))
@@ -199,3 +201,49 @@ by Alexander K. Lew, Tan Zhi-Xuan, Gabriel Grand, Vikash K. Mansinghka
 
 ;; ## A token-trie cache
 ;; (Section 3, Subsection "Shared Transformer cache" in the paper)
+
+#_(defn cached-eval [{:as context
+                      :keys [llama-ctx
+                             trie
+                             tokens
+                             path
+                             sub-trie
+                             remaining-tokens]
+                      :or {sub-trie trie
+                           path []
+                           remaining-tokens tokens}}]
+    (if (empty? remaining-tokens)
+      context
+      ;; else
+      (let [token (first remaining-tokens)
+            next-step [:children token]
+            next-path (concat path next-step)
+            next-sub-trie (get-in sub-trie next-step)
+            ;;
+            {:keys [state-data-id state-data]}
+            (cache-state-data!
+             {:state-data-id (:llama-state-id next-sub-trie)
+              :state-data-fn (fn [_]
+                               (let [llama-state (if (= path [])
+                                                   @*initial-llama-state
+                                                   (->> sub-trie
+                                                        :llama-state-id
+                                                        (cache/lookup @*llama-state-cache)))]
+                                 (assert llama-state)
+                                 (prn [:eval token (untokenize [token])])
+                                 (prn [:untokenized-path
+                                       (->> path
+                                            (filter number?)
+                                            untokenize)])
+                                 (raw/llama_set_state_data llama-ctx llama-state)
+                                 (time
+                                  (llama/llama-update llama-ctx
+                                                      token))
+                                 (get-state llama-ctx)))})]
+        (let [new-sub-trie {:logits (llama/get-logits llama-ctx)
+                            :llama-state-id next-llama-state-id}]
+          (recur (-> context
+                     (update :trie assoc-in next-path new-sub-trie)
+                     (assoc :sub-trie new-sub-trie
+                            :path next-path
+                            :remaining-tokens (rest remaining-tokens))))))))
