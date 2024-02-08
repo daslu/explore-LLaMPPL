@@ -1,0 +1,471 @@
+
+---
+format:
+  html: {toc: true, toc-depth: 4, theme: spacelab, output-file: story1.html}
+code-block-background: true
+include-in-header: {text: '<link rel = "icon" href = "data:," />'}
+title: 'LLaMPPL in a special case: limiting token length'
+
+---
+<style></style><style>.printedClojure .sourceCode {
+  background-color: transparent;
+  border-style: none;
+}
+</style>
+<script src="story1_files/md-default1.js" type="text/javascript"></script><script src="story1_files/md-default2.js" type="text/javascript"></script><script src="story1_files/vega3.js" type="text/javascript"></script><script src="story1_files/vega4.js" type="text/javascript"></script><script src="story1_files/vega5.js" type="text/javascript"></script>
+
+::: {.sourceClojure}
+```clojure
+^{:clay {:quarto {:title "LLaMPPL in a special case: limiting token length"}}}
+(ns story1
+  (:require [tech.v3.datatype :as dtype]
+            [com.phronemophobic.llama :as llama]
+            [com.phronemophobic.llama.raw :as raw]
+            [com.phronemophobic.llama.util :as llutil]
+            [tech.v3.datatype.argops :as argops]
+            [clojure.math :as math]
+            [clojure.core.cache :as cache]
+            [clojure.core.cache.wrapped :as cache.wrapped]
+            [scicloj.kindly.v4.kind :as kind]
+            [scicloj.kindly.v4.api :as kindly]
+            [scicloj.noj.v1.vis.hanami :as hanami]
+            [aerial.hanami.templates :as ht]
+            [tablecloth.api :as tc]))
+```
+:::
+
+
+
+::: {.sourceClojure}
+```clojure
+(def md
+  (comp kindly/hide-code kind/md))
+```
+:::
+
+
+**WIP**
+
+This notebook demonstrates a Clojure implementation of a specifica case of LLaMPPL.
+Specifically, we explore the "Hard Constraints" case from
+
+[Sequential Monte Carlo Steering of Large Language Models using Probabilistic Programs](https://arxiv.org/abs/2306.03081)
+
+by Alexander K. Lew, Tan Zhi-Xuan, Gabriel Grand, Vikash K. Mansinghka
+(see Figure 1 and Subsection 2.2).
+
+
+## Constants
+Path to the LLM:
+
+
+::: {.sourceClojure}
+```clojure
+(def llama7b-path (str (System/getenv "MODELS_PATH")
+                       "/llama-2-7b-chat.ggmlv3.q4_0.bin"))
+```
+:::
+
+
+One megabyte:
+
+
+::: {.sourceClojure}
+```clojure
+(def MB (math/pow 2 20))
+```
+:::
+
+
+
+## Using llama.clj
+
+We will use [llama.clj](https://github.com/phronmophobic/llama.clj), a Clojure wrapper of llama.cpp.
+
+Create a new model context:
+
+
+::: {.sourceClojure}
+```clojure
+(defn ->llama-ctx []
+  (llama/create-context llama7b-path {}))
+```
+:::
+
+
+A copy of an empty model
+(to extract basic information):
+
+
+::: {.sourceClojure}
+```clojure
+(def base-llama-ctx
+  (->llama-ctx))
+```
+:::
+
+
+A function to turn a String of text to a list of tokens:
+
+
+::: {.sourceClojure}
+```clojure
+(defn tokenize [text]
+  (llutil/tokenize base-llama-ctx text))
+```
+:::
+
+
+Example:
+
+
+::: {.sourceClojure}
+```clojure
+(delay
+  (-> "The Fed says"
+      tokenize))
+```
+:::
+
+
+
+::: {.printedClojure}
+```clojure
+[1576 17972 4083]
+
+```
+:::
+
+
+A function to turn a list of tokens to a String of text:
+
+
+::: {.sourceClojure}
+```clojure
+(defn untokenize [tokens]
+  (llutil/untokenize base-llama-ctx tokens))
+```
+:::
+
+
+Example:
+
+
+::: {.sourceClojure}
+```clojure
+(delay
+  (-> "The Fed says"
+      tokenize
+      untokenize))
+```
+:::
+
+
+
+::: {.printedClojure}
+```clojure
+"The Fed says"
+
+```
+:::
+
+
+A map from tokens to the corresponding strings:
+
+
+::: {.sourceClojure}
+```clojure
+(def token->str
+  (into (sorted-map)
+        (comp (map
+               (fn [token]
+                 [token (raw/llama_token_to_str base-llama-ctx token)]))
+              (take-while (fn [[token untoken]]
+                            untoken)))
+        (range 0 Integer/MAX_VALUE)))
+```
+:::
+
+
+Example:
+
+
+::: {.sourceClojure}
+```clojure
+(delay
+  (->> "The Fed says"
+       tokenize
+       (map token->str)))
+```
+:::
+
+
+
+::: {.printedClojure}
+```clojure
+("The" " Fed" " says")
+
+```
+:::
+
+
+The EOS (end-of-sentence) token:
+
+
+::: {.sourceClojure}
+```clojure
+(def llama-eos (llama/eos base-llama-ctx))
+```
+:::
+
+
+Example:
+Getting next-token logits for a given sequence of tokens.
+
+
+::: {.sourceClojure}
+```clojure
+(delay
+  (-> (->llama-ctx)
+      (llama/llama-update "What is the") ; Note this is **mutating** the context
+      llama/get-logits
+      (->> (take 5))))
+```
+:::
+
+
+
+::: {.printedClojure}
+```clojure
+(-4.5714364 -3.2961884 0.7494923 0.36316544 -1.4788194)
+
+```
+:::
+
+
+
+::: {.sourceClojure}
+```clojure
+(delay
+  (-> (->llama-ctx)
+      (llama/llama-update "What is the")
+      llama/get-logits
+      (->> (hash-map :logit))
+      tc/dataset
+      (hanami/histogram :logit {:nbins 100})
+      (assoc :height 200)))
+```
+:::
+
+
+
+```{=html}
+<div><script>vegaEmbed(document.currentScript.parentElement, {"encoding":{"y":{"field":"count","type":"quantitative"},"x":{"scale":{"zero":false},"field":"left","type":"quantitative","title":"logit"},"y2":{"field":0,"type":"quantitative"},"x2":{"scale":{"zero":false},"field":"right","type":"quantitative"}},"mark":"rect","width":400,"background":"floralwhite","height":200,"data":{"url":"story1_files\/0.csv","format":{"type":"csv"}}});</script></div>
+```
+
+
+Example:
+Getting the most probable next-token:
+
+
+::: {.sourceClojure}
+```clojure
+(delay
+  (let [llama-ctx (->llama-ctx)]
+    (-> llama-ctx
+        (llama/llama-update "What is the")
+        llama/get-logits
+        argops/argmax
+        token->str)))
+```
+:::
+
+
+
+::: {.printedClojure}
+```clojure
+" difference"
+
+```
+:::
+
+
+
+## Keeping and retrieving context state
+A function to get a copy of a given model-context's state
+(so that we can reuse the KV-cache later):
+
+
+::: {.sourceClojure}
+```clojure
+(defn ctx->state-data [llama-ctx]
+  (let [size (raw/llama_get_state_size llama-ctx)
+        mem (byte-array size)]
+    (raw/llama_copy_state_data llama-ctx mem)
+    mem))
+```
+:::
+
+
+How big is this state?
+
+
+::: {.sourceClojure}
+```clojure
+(delay
+  (-> (->llama-ctx)
+      (llama/llama-update "What is the")
+      ctx->state-data
+      count
+      (/ MB)
+      (->> (format "%.02f MB"))))
+```
+:::
+
+
+
+::: {.printedClojure}
+```clojure
+"258.18 MB"
+
+```
+:::
+
+
+A function to recreate a model-cotext from its state:
+
+
+::: {.sourceClojure}
+```clojure
+(defn state-data->ctx [state-data]
+  (let [llama-ctx (->llama-ctx)]
+    (raw/llama_set_state_data llama-ctx state-data)
+    llama-ctx))
+```
+:::
+
+
+A function to turn a piece of text to the corresponding
+model state data:
+
+
+::: {.sourceClojure}
+```clojure
+(defn text->state-data [text]
+  (-> (->llama-ctx)
+      (llama/llama-update text)
+      ctx->state-data))
+```
+:::
+
+
+Example:
+Keep, retrieve, and reuse the state
+
+
+::: {.sourceClojure}
+```clojure
+(delay
+  (-> "What is the"
+      text->state-data
+      state-data->ctx
+      llama/get-logits
+      argops/argmax
+      token->str))
+```
+:::
+
+
+
+::: {.printedClojure}
+```clojure
+" difference"
+
+```
+:::
+
+
+
+## An LRU cache for context states
+
+
+::: {.sourceClojure}
+```clojure
+(def *state-data-cache
+  (cache.wrapped/lru-cache-factory
+   {}
+   {:threshold 20}))
+```
+:::
+
+
+
+::: {.sourceClojure}
+```clojure
+(def cache-state-data!
+  (let [*id (atom 0)]
+    (fn [{:keys [state-data-id
+                 state-data-fn]}]
+      (let [id (or state-data-id (swap! *id inc))]
+        {:state-data-id id
+         :state-data (cache.wrapped/lookup-or-miss
+                      *state-data-cache
+                      id
+                      state-data-fn)}))))
+```
+:::
+
+
+Let us try it out:
+
+
+::: {.sourceClojure}
+```clojure
+(delay
+  (let [;; Compute state data and keep it in the cache.
+        {:keys [state-data-id
+                state-data]} (cache-state-data!
+                              {:state-data-fn (fn [_]
+                                                (text->state-data
+                                                 "What is the"))})
+        ;; Use the cache a few more times.
+        _ (dotimes [i 3]
+            (cache-state-data!
+             {:state-data-fn (fn [_]
+                               (text->state-data
+                                (str "What is " i)))}))
+        ;; Retrieve our state data from the first call.
+        retrieved-state-data (-> {:state-data-id state-data-id}
+                                 cache-state-data!
+                                 :state-data)]
+    ;; Make sure it is equals.
+    (java.util.Arrays/equals
+     ^bytes state-data
+     ^bytes retrieved-state-data)))
+```
+:::
+
+
+
+::: {.printedClojure}
+```clojure
+true
+
+```
+:::
+
+
+
+## A token-trie cache
+(Section 3, Subsection "Shared Transformer cache" in the paper)
+
+
+```{=html}
+<div style="background-color:grey;height:2px;width:100%;"></div>
+```
+
+
+
+```{=html}
+<div><pre><small><small>source: <a href="https://github.com/daslu/explore-LLaMPPL/blob/main/notebooks/story1.clj">notebooks/story1.clj</a></small></small></pre></div>
+```
