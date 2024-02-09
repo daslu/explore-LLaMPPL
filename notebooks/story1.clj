@@ -237,7 +237,7 @@ by Alexander K. Lew, Tan Zhi-Xuan, Gabriel Grand, Vikash K. Mansinghka
           next-sub-trie (get-in sub-trie next-step)]
       (if (some->> next-sub-trie
                    :llama-state-id
-                   (cache/has? @*cache-atom))
+                   (cache.wrapped/has? *cache-atom))
         ;; We have already created next-sub-trie in the past,
         ;; and we have its llama state still in the cache,
         ;; so let us step into it.
@@ -268,7 +268,7 @@ by Alexander K. Lew, Tan Zhi-Xuan, Gabriel Grand, Vikash K. Mansinghka
                                        (not= llama-ctx-state-id))
                                    (->> sub-trie
                                         :llama-state-id
-                                        (cache/lookup @*cache-atom)
+                                        (cache.wrapped/lookup *cache-atom)
                                         (raw/llama_set_state_data llama-ctx))
                                    ;; Otherwise, our current state is what we need.
                                    :else
@@ -308,7 +308,7 @@ by Alexander K. Lew, Tan Zhi-Xuan, Gabriel Grand, Vikash K. Mansinghka
                     (assoc :tokens tokens)
                     cached-eval)]
     (reset! *context-atom
-            (select-keys context [:llama-ctx :trie]))
+            (select-keys context [:llama-ctx :*cache-atom :trie]))
     context))
 
 (defn logits! [*context-atom tokens]
@@ -337,7 +337,8 @@ by Alexander K. Lew, Tan Zhi-Xuan, Gabriel Grand, Vikash K. Mansinghka
                       tokenize
                       (logits! *context-atom)
                       argops/argmax
-                      token->str))))))
+                      token->str
+                      (vector (now))))))))
 
 
 
