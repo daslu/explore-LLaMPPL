@@ -171,7 +171,6 @@ by Alexander K. Lew, Tan Zhi-Xuan, Gabriel Grand, Vikash K. Mansinghka
     (fn [{:keys [state-id
                  state-data-fn
                  *cache-atom]}]
-      (prn [:DEBUG *cache-atom])
       (let [id (or state-id (swap! *id inc))]
         {:state-id id
          :state-data (cache.wrapped/lookup-or-miss
@@ -250,7 +249,8 @@ by Alexander K. Lew, Tan Zhi-Xuan, Gabriel Grand, Vikash K. Mansinghka
         ;; Else, we need to create the next sub trie.
         (let [{:keys [state-id state-data]}
               (cache-state-data!
-               {:state-data-fn (fn [_]
+               {:*cache-atom *cache-atom
+                :state-data-fn (fn [_]
 
                                  ;; Make sure the llama-ctx has the right state
                                  ;; to continue.
@@ -317,21 +317,30 @@ by Alexander K. Lew, Tan Zhi-Xuan, Gabriel Grand, Vikash K. Mansinghka
       :sub-trie
       :logits))
 
+
 (delay
-  (let [*context-atom (atom (new-context {:lru-params {:threshold 20}}))
-        ->next-token (fn [text]
-                       (->> text
-                            tokenize
-                            (logits! *context-atom)
-                            argops/argmax
-                            token->str))]
-    [(now)
-     (->next-token "How much wood would a")
-     (now)
-     (->next-token "How much wood would a woodchuck")
-     (now)
-     (->next-token "How much wood would a woodchuck chuck")
-     (now)]))
+  (let [*context-atom (atom (new-context {:lru-params {:threshold 20}}))]
+    (->> "How much wood would a"
+         tokenize
+         (logits! *context-atom)
+         argops/argmax
+         token->str)))
+
+
+(delay
+  (let [*context-atom (atom (new-context {:lru-params {:threshold 50}}))]
+    (->> ["How much wood would a"
+          "How much wood would a woodchuck"
+          "How much wood would a woodchuck chuck"]
+         (mapv (fn [text]
+                 (->> text
+                      tokenize
+                      (logits! *context-atom)
+                      argops/argmax
+                      token->str))))))
+
+
+
 
 
 ;; (defn gen-samplef [seed]
