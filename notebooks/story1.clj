@@ -340,24 +340,31 @@ by Alexander K. Lew, Tan Zhi-Xuan, Gabriel Grand, Vikash K. Mansinghka
                       token->str
                       (vector (now))))))))
 
+;; ## Sampling random tokens
 
+(defn ->sample-fn [*context-atom
+                   {:keys [logits seed]}]
+  (let [{:keys [llama-ctx]} @*context-atom
+        _ (raw/llama_set_rng_seed llama-ctx seed)]
+    (llama/init-mirostat-v2-sampler llama-ctx)))
 
-
-
-;; (defn gen-samplef [seed]
-;;   (let [{:keys [llama-ctx]} @*main-context]
-;;     (raw/llama_set_rng_seed llama-ctx seed)
-;;     (llama/init-mirostat-v2-sampler llama-ctx)))
-
-;; (delay
-;;   (let [samplef (gen-samplef 123456)
-;;         logits (-> "How much wood"
-;;                    tokenize
-;;                    logits!)]
-;;     (->> (repeatedly
-;;           100
-;;           ;; #(-> logits
-;;           ;;      argops/argmax
-;;           ;;      token->str)
-;;           #(untokenize [(samplef logits)]))
-;;          frequencies)))
+(delay
+  (let [*context-atom (atom
+                       (new-context
+                        {:lru-params {:threshold 50}}))]
+    (->> ["How much wood would a"
+          "How much wood would a woodchuck"
+          "How much wood would a woodchuck chuck"]
+         (mapv
+          (fn [text]
+            (let [logits (->> text
+                              tokenize
+                              (logits! *context-atom))
+                  samplef (->> {:logits logits
+                                :seed 12345}
+                               (->sample-fn *context-atom))]
+              [text
+               (->> (repeatedly
+                     1000
+                     #(untokenize [(samplef logits)]))
+                    frequencies)]))))))
