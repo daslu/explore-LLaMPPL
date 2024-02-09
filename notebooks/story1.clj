@@ -17,6 +17,9 @@
 (def md
   (comp kindly/hide-code kind/md))
 
+(defn now []
+  (java.util.Date.))
+
 (md
  "**WIP**
 
@@ -126,11 +129,12 @@ by Alexander K. Lew, Tan Zhi-Xuan, Gabriel Grand, Vikash K. Mansinghka
     (raw/llama_copy_state_data llama-ctx mem)
     mem))
 
+(def base-state-data
+  (ctx->state-data base-llama-ctx))
+
 ;; How big is this state?
 (delay
-  (-> (->llama-ctx)
-      (llama/llama-update "What is the")
-      ctx->state-data
+  (-> base-state-data
       count
       (/ MB)
       (->> (format "%.02f MB"))))
@@ -166,10 +170,10 @@ by Alexander K. Lew, Tan Zhi-Xuan, Gabriel Grand, Vikash K. Mansinghka
 
 (def cache-state-data!
   (let [*id (atom 0)]
-    (fn [{:keys [state-data-id
+    (fn [{:keys [state-id
                  state-data-fn]}]
-      (let [id (or state-data-id (swap! *id inc))]
-        {:state-data-id id
+      (let [id (or state-id (swap! *id inc))]
+        {:state-id id
          :state-data (cache.wrapped/lookup-or-miss
                       *state-data-cache
                       id
@@ -178,7 +182,7 @@ by Alexander K. Lew, Tan Zhi-Xuan, Gabriel Grand, Vikash K. Mansinghka
 ;; Let us try it out:
 (delay
   (let [;; Compute state data and keep it in the cache.
-        {:keys [state-data-id
+        {:keys [state-id
                 state-data]} (cache-state-data!
                               {:state-data-fn (fn [_]
                                                 (text->state-data
@@ -190,7 +194,7 @@ by Alexander K. Lew, Tan Zhi-Xuan, Gabriel Grand, Vikash K. Mansinghka
                                (text->state-data
                                 (str "What is " i)))}))
         ;; Retrieve our state data from the first call.
-        retrieved-state-data (-> {:state-data-id state-data-id}
+        retrieved-state-data (-> {:state-id state-id}
                                  cache-state-data!
                                  :state-data)]
     ;; Make sure it is equals.
@@ -202,48 +206,157 @@ by Alexander K. Lew, Tan Zhi-Xuan, Gabriel Grand, Vikash K. Mansinghka
 ;; ## A token-trie cache
 ;; (Section 3, Subsection "Shared Transformer cache" in the paper)
 
-#_(defn cached-eval [{:as context
-                      :keys [llama-ctx
-                             trie
-                             tokens
-                             path
-                             sub-trie
-                             remaining-tokens]
-                      :or {sub-trie trie
-                           path []
-                           remaining-tokens tokens}}]
-    (if (empty? remaining-tokens)
-      context
-      ;; else
-      (let [token (first remaining-tokens)
-            next-step [:children token]
-            next-path (concat path next-step)
-            next-sub-trie (get-in sub-trie next-step)
-            ;;
-            {:keys [state-data-id state-data]}
-            (cache-state-data!
-             {:state-data-id (:llama-state-id next-sub-trie)
-              :state-data-fn (fn [_]
-                               (let [llama-state (if (= path [])
-                                                   @*initial-llama-state
-                                                   (->> sub-trie
-                                                        :llama-state-id
-                                                        (cache/lookup @*llama-state-cache)))]
-                                 (assert llama-state)
-                                 (prn [:eval token (untokenize [token])])
-                                 (prn [:untokenized-path
+(defn cached-eval [{:as context
+                    :keys [llama-ctx
+                           llama-ctx-state-id
+                           trie
+                           tokens
+                           path
+                           sub-trie
+                           remaining-tokens]
+                    :or {sub-trie trie
+                         path []
+                         remaining-tokens tokens}}]
+  (if (empty? remaining-tokens)
+    ;; done - return this context
+    context
+    ;; else
+    (let [token (first remaining-tokens)
+          ;; Look into the next sub trie,
+          ;; following this token:
+          next-step [:children token]
+          next-path (concat path next-step)
+          next-sub-trie (get-in sub-trie next-step)]
+      (if (some->> next-sub-trie
+                   :llama-state-id
+                   (cache/has? @*state-data-cache))
+        ;; We have already created next-sub-trie in the past,
+        ;; and we have its llama state still in the cache,
+        ;; so let us step into it.
+        (recur (-> context
+                   (assoc
+                    :sub-trie next-sub-trie
+                    :path next-path
+                    :remaining-tokens (rest remaining-tokens))))
+        ;; Else, we need to create the next sub trie.
+        (let [{:keys [state-id state-data]}
+              (cache-state-data!
+               {:state-data-fn (fn [_]
+
+                                 ;; Make sure the llama-ctx has the right state
+                                 ;; to continue.
+                                 (cond
+                                   ;; When we are in the beginning of the path,
+                                   ;; take the base state.
+                                   (= path [])
+                                   (raw/llama_set_state_data llama-ctx
+                                                             base-state-data)
+                                   ;; When the last evaluation does not fit
+                                   ;; out place in the trie,
+                                   ;; bring the reletant state from cache.
+                                   (-> sub-trie
+                                       :llama-state-id
+                                       (not= llama-ctx-state-id))
+                                   (->> sub-trie
+                                        :llama-state-id
+                                        (cache/lookup @*state-data-cache)
+                                        (raw/llama_set_state_data llama-ctx))
+                                   ;; Otherwise, our current state is what we need.
+                                   :else
+                                   nil)
+                                 ;; Evaluate the current token:
+                                 (prn [:eval
                                        (->> path
                                             (filter number?)
-                                            untokenize)])
-                                 (raw/llama_set_state_data llama-ctx llama-state)
+                                            untokenize)
+                                       '-->
+                                       (untokenize [token])])
                                  (time
                                   (llama/llama-update llama-ctx
                                                       token))
-                                 (get-state llama-ctx)))})]
-        (let [new-sub-trie {:logits (llama/get-logits llama-ctx)
-                            :llama-state-id next-llama-state-id}]
+                                 (ctx->state-data llama-ctx))})
+              ;; Create the next sub trie:
+              new-sub-trie {:logits (llama/get-logits llama-ctx)
+                            :llama-state-id state-id}]
+          ;; Step into the next sub trie:
           (recur (-> context
                      (update :trie assoc-in next-path new-sub-trie)
-                     (assoc :sub-trie new-sub-trie
+                     (assoc :llama-ctx-state-id state-id
+                            :sub-trie new-sub-trie
                             :path next-path
-                            :remaining-tokens (rest remaining-tokens))))))))
+                            :remaining-tokens (rest remaining-tokens)))))))))
+
+
+(defonce *main-context (atom {}))
+
+(defn init!
+  ([] (init! {}))
+  ([lru-params]
+   (let [llama-ctx (->llama-ctx)]
+     (llama/llama-update llama-ctx (llama/bos) 0)
+     (reset! *state-data-cache (cache/lru-cache-factory
+                                {}
+                                lru-params))
+     (reset! *main-context
+             {:llama-ctx llama-ctx
+              :trie {}}))
+   (System/gc)))
+
+(init!)
+
+(defn cached-eval! [tokens]
+  (let [context (-> @*main-context
+                    (assoc :tokens tokens)
+                    cached-eval)]
+    (reset! *main-context
+            (select-keys context [:llama-ctx :trie]))
+    context))
+
+(defn logits! [tokens]
+  (-> tokens
+      cached-eval!
+      :sub-trie
+      :logits))
+
+(delay
+  (init! {:threshold 20})
+
+  (-> "How much wood would a"
+      tokenize
+      logits!
+      argops/argmax
+      token->str
+      (vector (now)))
+
+  (-> "How much wood would a woodchuck"
+      tokenize
+      logits!
+      argops/argmax
+      token->str
+      (vector (now)))
+
+  (-> "How much wood would a woodchuck chuck"
+      tokenize
+      logits!
+      argops/argmax
+      token->str
+      (vector (now))))
+
+
+;; (defn gen-samplef [seed]
+;;   (let [{:keys [llama-ctx]} @*main-context]
+;;     (raw/llama_set_rng_seed llama-ctx seed)
+;;     (llama/init-mirostat-v2-sampler llama-ctx)))
+
+;; (delay
+;;   (let [samplef (gen-samplef 123456)
+;;         logits (-> "How much wood"
+;;                    tokenize
+;;                    logits!)]
+;;     (->> (repeatedly
+;;           100
+;;           ;; #(-> logits
+;;           ;;      argops/argmax
+;;           ;;      token->str)
+;;           #(untokenize [(samplef logits)]))
+;;          frequencies)))
