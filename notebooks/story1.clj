@@ -20,6 +20,9 @@
 (defn now []
   (java.util.Date.))
 
+(defn prn-with-time [x]
+  (prn (now) x))
+
 (md
  "**WIP**
 
@@ -162,39 +165,42 @@ by Alexander K. Lew, Tan Zhi-Xuan, Gabriel Grand, Vikash K. Mansinghka
       argops/argmax
       token->str))
 
-;; ## An LRU cache for context states
-(def *state-data-cache
-  (cache.wrapped/lru-cache-factory
-   {}
-   {:threshold 20}))
-
+;; ## Caching context states:
 (def cache-state-data!
   (let [*id (atom 0)]
     (fn [{:keys [state-id
-                 state-data-fn]}]
+                 state-data-fn
+                 *cache-atom]}]
+      (prn [:DEBUG *cache-atom])
       (let [id (or state-id (swap! *id inc))]
         {:state-id id
          :state-data (cache.wrapped/lookup-or-miss
-                      *state-data-cache
+                      *cache-atom
                       id
                       state-data-fn)}))))
 
-;; Let us try it out:
+;; Let us try it out with an LRU cache:
 (delay
-  (let [;; Compute state data and keep it in the cache.
+  (let [*cache-atom (cache.wrapped/lru-cache-factory
+                     {}
+                     {:threshold 20})
+        ;; Compute state data and keep it in the cache.
         {:keys [state-id
                 state-data]} (cache-state-data!
-                              {:state-data-fn (fn [_]
+                              {:*cache-atom *cache-atom
+                               :state-data-fn (fn [_]
                                                 (text->state-data
                                                  "What is the"))})
         ;; Use the cache a few more times.
         _ (dotimes [i 3]
             (cache-state-data!
-             {:state-data-fn (fn [_]
+             {:*cache-atom *cache-atom
+              :state-data-fn (fn [_]
                                (text->state-data
                                 (str "What is " i)))}))
         ;; Retrieve our state data from the first call.
-        retrieved-state-data (-> {:state-id state-id}
+        retrieved-state-data (-> {:*cache-atom *cache-atom
+                                  :state-id state-id}
                                  cache-state-data!
                                  :state-data)]
     ;; Make sure it is equals.
@@ -206,10 +212,13 @@ by Alexander K. Lew, Tan Zhi-Xuan, Gabriel Grand, Vikash K. Mansinghka
 ;; ## A token-trie cache
 ;; (Section 3, Subsection "Shared Transformer cache" in the paper)
 
+
+
 (defn cached-eval [{:as context
                     :keys [llama-ctx
                            llama-ctx-state-id
                            trie
+                           *cache-atom
                            tokens
                            path
                            sub-trie
@@ -229,7 +238,7 @@ by Alexander K. Lew, Tan Zhi-Xuan, Gabriel Grand, Vikash K. Mansinghka
           next-sub-trie (get-in sub-trie next-step)]
       (if (some->> next-sub-trie
                    :llama-state-id
-                   (cache/has? @*state-data-cache))
+                   (cache/has? @*cache-atom))
         ;; We have already created next-sub-trie in the past,
         ;; and we have its llama state still in the cache,
         ;; so let us step into it.
@@ -259,7 +268,7 @@ by Alexander K. Lew, Tan Zhi-Xuan, Gabriel Grand, Vikash K. Mansinghka
                                        (not= llama-ctx-state-id))
                                    (->> sub-trie
                                         :llama-state-id
-                                        (cache/lookup @*state-data-cache)
+                                        (cache/lookup @*cache-atom)
                                         (raw/llama_set_state_data llama-ctx))
                                    ;; Otherwise, our current state is what we need.
                                    :else
@@ -287,60 +296,42 @@ by Alexander K. Lew, Tan Zhi-Xuan, Gabriel Grand, Vikash K. Mansinghka
                             :remaining-tokens (rest remaining-tokens)))))))))
 
 
-(defonce *main-context (atom {}))
+(defn new-context [{:keys [lru-params]}]
+  {:llama-ctx (->llama-ctx)
+   :trie {}
+   :*cache-atom (cache.wrapped/lru-cache-factory
+                 {}
+                 lru-params)})
 
-(defn init!
-  ([] (init! {}))
-  ([lru-params]
-   (let [llama-ctx (->llama-ctx)]
-     (llama/llama-update llama-ctx (llama/bos) 0)
-     (reset! *state-data-cache (cache/lru-cache-factory
-                                {}
-                                lru-params))
-     (reset! *main-context
-             {:llama-ctx llama-ctx
-              :trie {}}))
-   (System/gc)))
-
-(init!)
-
-(defn cached-eval! [tokens]
-  (let [context (-> @*main-context
+(defn cached-eval! [*context-atom tokens]
+  (let [context (-> @*context-atom
                     (assoc :tokens tokens)
                     cached-eval)]
-    (reset! *main-context
+    (reset! *context-atom
             (select-keys context [:llama-ctx :trie]))
     context))
 
-(defn logits! [tokens]
-  (-> tokens
-      cached-eval!
+(defn logits! [*context-atom tokens]
+  (-> *context-atom
+      (cached-eval! tokens)
       :sub-trie
       :logits))
 
 (delay
-  (init! {:threshold 20})
-
-  (-> "How much wood would a"
-      tokenize
-      logits!
-      argops/argmax
-      token->str
-      (vector (now)))
-
-  (-> "How much wood would a woodchuck"
-      tokenize
-      logits!
-      argops/argmax
-      token->str
-      (vector (now)))
-
-  (-> "How much wood would a woodchuck chuck"
-      tokenize
-      logits!
-      argops/argmax
-      token->str
-      (vector (now))))
+  (let [*context-atom (atom (new-context {:lru-params {:threshold 20}}))
+        ->next-token (fn [text]
+                       (->> text
+                            tokenize
+                            (logits! *context-atom)
+                            argops/argmax
+                            token->str))]
+    [(now)
+     (->next-token "How much wood would a")
+     (now)
+     (->next-token "How much wood would a woodchuck")
+     (now)
+     (->next-token "How much wood would a woodchuck chuck")
+     (now)]))
 
 
 ;; (defn gen-samplef [seed]
