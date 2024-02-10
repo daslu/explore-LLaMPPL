@@ -306,7 +306,7 @@ by Alexander K. Lew, Tan Zhi-Xuan, Gabriel Grand, Vikash K. Mansinghka
   ([]
    (new-context {}))
   ([{:keys [lru-params seed]
-     :or {lru-params {:threshold 50}
+     :or {lru-params {:threshold 20}
           seed 12345}}]
    (System/gc)
    (let [llama-ctx (->llama-ctx)
@@ -326,7 +326,7 @@ by Alexander K. Lew, Tan Zhi-Xuan, Gabriel Grand, Vikash K. Mansinghka
                     (assoc :tokens tokens)
                     cached-eval)]
     (reset! *context
-            (select-keys context [:llama-ctx :*cache :trie]))
+            (select-keys context [:llama-ctx :*cache :samplef :trie]))
     context))
 
 (defn logits! [*context tokens]
@@ -379,7 +379,7 @@ by Alexander K. Lew, Tan Zhi-Xuan, Gabriel Grand, Vikash K. Mansinghka
 
 
 (defn sample-once! [*context logits]
-  ((->sample-fn *context)
+  ((:samplef @*context)
    logits))
 
 (delay
@@ -415,7 +415,7 @@ by Alexander K. Lew, Tan Zhi-Xuan, Gabriel Grand, Vikash K. Mansinghka
 
 
 (delay
-  (let [*context (atom (new-context {:seed 9}))]
+  (let [*context (atom (new-context {:seed 1}))]
     (->> #(->> "How much wood"
                tokenize
                (iterate (partial M-step *context))
@@ -427,11 +427,11 @@ by Alexander K. Lew, Tan Zhi-Xuan, Gabriel Grand, Vikash K. Mansinghka
 
 
 (delay
-  (let [*context (atom (new-context {:seed 9}))]
+  (let [*context (atom (new-context {:seed 1}))]
     (->> #(->> "I'll just quote a poem."
                tokenize
                (iterate (partial M-step *context))
-               (take 20)
+               (take 40)
                (mapv (juxt finished?
                            untokenize)))
          (repeatedly 3)
