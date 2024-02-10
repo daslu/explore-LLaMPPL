@@ -52,7 +52,9 @@ by Alexander K. Lew, Tan Zhi-Xuan, Gabriel Grand, Vikash K. Mansinghka
 
 ;; Create a new model context:
 (defn ->llama-ctx []
-  (llama/create-context llama7b-path {}))
+  (llama/create-context
+   llama7b-path
+   {:use-mlock true}))
 
 ;; A copy of an empty model
 ;; (to extract basic information):
@@ -185,11 +187,11 @@ by Alexander K. Lew, Tan Zhi-Xuan, Gabriel Grand, Vikash K. Mansinghka
                       id
                       state-data-fn)}))))
 
-;; Let us try it out with an LRU cache:
+;; Let us try it out with a FIFO cache:
 (delay
-  (let [*cache (cache.wrapped/lru-cache-factory
+  (let [*cache (cache.wrapped/fifo-cache-factory
                 {}
-                {:threshold 20})
+                {:threshold 60})
         ;; Compute state data and keep it in the cache.
         {:keys [state-id
                 state-data]} (cache-state-data!
@@ -289,7 +291,9 @@ by Alexander K. Lew, Tan Zhi-Xuan, Gabriel Grand, Vikash K. Mansinghka
                                        (untokenize [token])])
                                  (time
                                   (llama/llama-update llama-ctx
-                                                      token))
+                                                      token
+                                                      ;; num-threads
+                                                      8))
                                  (ctx->state-data llama-ctx))})
               ;; Create the next sub trie:
               new-sub-trie {:logits (llama/get-logits llama-ctx)
@@ -379,6 +383,9 @@ by Alexander K. Lew, Tan Zhi-Xuan, Gabriel Grand, Vikash K. Mansinghka
 
 
 (defn sample-once! [*context logits]
+  (-> @*context
+      :llama-ctx
+      (raw/llama_set_rng_seed (rand-int 9999)))
   ((:samplef @*context)
    logits))
 
@@ -428,13 +435,14 @@ by Alexander K. Lew, Tan Zhi-Xuan, Gabriel Grand, Vikash K. Mansinghka
 
 (delay
   (let [*context (atom (new-context {:seed 1}))]
-    (->> #(->> "I'll just quote a poem."
+    (->> #(->> "The Fed says"
                tokenize
                (iterate (partial M-step *context))
-               (take 40)
-               (mapv (juxt finished?
-                           untokenize)))
-         (repeatedly 3)
+               (take 30)
+               last
+               ((juxt finished?
+                      untokenize)))
+         (repeatedly 2)
          vec)))
 
 ;; ### The potential function
