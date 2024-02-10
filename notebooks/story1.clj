@@ -12,7 +12,8 @@
             [scicloj.kindly.v4.api :as kindly]
             [scicloj.noj.v1.vis.hanami :as hanami]
             [aerial.hanami.templates :as ht]
-            [tablecloth.api :as tc]))
+            [tablecloth.api :as tc]
+            [clojure.string :as str]))
 
 (def md
   (comp kindly/hide-code kind/md))
@@ -50,15 +51,8 @@ by Alexander K. Lew, Tan Zhi-Xuan, Gabriel Grand, Vikash K. Mansinghka
 (md "We will use [llama.clj](https://github.com/phronmophobic/llama.clj), a Clojure wrapper of llama.cpp.")
 
 ;; Create a new model context:
-(defn ->llama-ctx
-  ([]
-   (->llama-ctx {}))
-  ([{:keys [seed]
-     :or {seed 1}}]
-   (let [llama-ctx (llama/create-context llama7b-path {})]
-     (when seed
-       (raw/llama_set_rng_seed llama-ctx seed))
-     llama-ctx)))
+(defn ->llama-ctx []
+  (llama/create-context llama7b-path {}))
 
 ;; A copy of an empty model
 ;; (to extract basic information):
@@ -308,7 +302,6 @@ by Alexander K. Lew, Tan Zhi-Xuan, Gabriel Grand, Vikash K. Mansinghka
                             :path next-path
                             :remaining-tokens (rest remaining-tokens)))))))))
 
-
 (defn new-context
   ([]
    (new-context {}))
@@ -316,11 +309,17 @@ by Alexander K. Lew, Tan Zhi-Xuan, Gabriel Grand, Vikash K. Mansinghka
      :or {lru-params {:threshold 50}
           seed 12345}}]
    (System/gc)
-   {:llama-ctx (->llama-ctx {:seed seed})
-    :trie {}
-    :*cache (cache.wrapped/lru-cache-factory
-             {}
-             lru-params)}))
+   (let [llama-ctx (->llama-ctx)
+         samplef (llama/init-mirostat-v2-sampler
+                  llama-ctx)]
+     (prn [:seed seed])
+     (raw/llama_set_rng_seed llama-ctx seed)
+     {:llama-ctx llama-ctx
+      :samplef samplef
+      :trie {}
+      :*cache (cache.wrapped/lru-cache-factory
+               {}
+               lru-params)})))
 
 (defn cached-eval! [*context tokens]
   (let [context (-> @*context
@@ -361,13 +360,9 @@ by Alexander K. Lew, Tan Zhi-Xuan, Gabriel Grand, Vikash K. Mansinghka
 
 ;; ## Sampling random tokens
 
-(defn ->sample-fn [*context]
-  (-> @*context
-      :llama-ctx
-      llama/init-mirostat-v2-sampler))
-
 (delay
-  (let [*context (atom (new-context))]
+  (let [*context (atom (new-context {:seed 1}))
+        {:keys [samplef]} @*context]
     (->> ["How much wood would a"
           "How much wood would a woodchuck"
           "How much wood would a woodchuck chuck"]
@@ -375,13 +370,13 @@ by Alexander K. Lew, Tan Zhi-Xuan, Gabriel Grand, Vikash K. Mansinghka
           (fn [text]
             (let [logits (->> text
                               tokenize
-                              (logits! *context))
-                  samplef (->sample-fn *context)]
+                              (logits! *context))]
               [text
                (->> (repeatedly
                      1000
                      #(untokenize [(samplef logits)]))
                     frequencies)]))))))
+
 
 (defn sample-once! [*context logits]
   ((->sample-fn *context)
@@ -420,35 +415,35 @@ by Alexander K. Lew, Tan Zhi-Xuan, Gabriel Grand, Vikash K. Mansinghka
 
 
 (delay
-  (let [*context (atom (new-context))]
+  (let [*context (atom (new-context {:seed 9}))]
     (->> #(->> "How much wood"
                tokenize
                (iterate (partial M-step *context))
                (take 5)
                last
                untokenize)
-         (repeatedly 10)
+         (repeatedly 5)
          vec)))
 
+
 (delay
-  (let [*context (atom (new-context))]
+  (let [*context (atom (new-context {:seed 9}))]
     (->> #(->> "I'll just quote a poem."
                tokenize
                (iterate (partial M-step *context))
-               (take 50)
-               (filter finished?)
-               first
-               untokenize)
-         (repeatedly 1)
+               (take 20)
+               (mapv (juxt finished?
+                           untokenize)))
+         (repeatedly 3)
          vec)))
 
 ;; ### The potential function
 
 
 
-(defn G [threshold current-tokens]
-  (if (-> current-tokens
-          context/untokenize
-          (string/split  #" ")
-          (->> (every? #(-> % count (<= threshold)))))
-    1 0))
+#_(defn G [threshold current-tokens]
+    (if (-> current-tokens
+            context/untokenize
+            (str/split  #" ")
+            (->> (every? #(-> % count (<= threshold)))))
+      1 0))
