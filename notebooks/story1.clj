@@ -29,7 +29,8 @@
 This notebook demonstrates a Clojure implementation of a specifica case of LLaMPPL.
 Specifically, we explore the \"Hard Constraints\" case from
 
-[Sequential Monte Carlo Steering of Large Language Models using Probabilistic Programs](https://arxiv.org/abs/2306.03081)
+[Sequential Monte Carlo Steering of Large Language Models
+using Probabilistic Programs](https://arxiv.org/abs/2306.03081)
 
 by Alexander K. Lew, Tan Zhi-Xuan, Gabriel Grand, Vikash K. Mansinghka
 (see Figure 1 and Subsection 2.2).")
@@ -49,8 +50,15 @@ by Alexander K. Lew, Tan Zhi-Xuan, Gabriel Grand, Vikash K. Mansinghka
 (md "We will use [llama.clj](https://github.com/phronmophobic/llama.clj), a Clojure wrapper of llama.cpp.")
 
 ;; Create a new model context:
-(defn ->llama-ctx []
-  (llama/create-context llama7b-path {}))
+(defn ->llama-ctx
+  ([]
+   (->llama-ctx {}))
+  ([{:keys [seed]
+     :or {seed 1}}]
+   (let [llama-ctx (llama/create-context llama7b-path {})]
+     (when seed
+       (raw/llama_set_rng_seed llama-ctx seed))
+     llama-ctx)))
 
 ;; A copy of an empty model
 ;; (to extract basic information):
@@ -94,6 +102,11 @@ by Alexander K. Lew, Tan Zhi-Xuan, Gabriel Grand, Vikash K. Mansinghka
 
 ;; The EOS (end-of-sentence) token:
 (def llama-eos (llama/eos base-llama-ctx))
+
+(defn finished? [tokens]
+  (-> tokens
+      last
+      (= llama-eos)))
 
 ;; Example:
 ;; Getting next-token logits for a given sequence of tokens.
@@ -170,35 +183,35 @@ by Alexander K. Lew, Tan Zhi-Xuan, Gabriel Grand, Vikash K. Mansinghka
   (let [*id (atom 0)]
     (fn [{:keys [state-id
                  state-data-fn
-                 *cache-atom]}]
+                 *cache]}]
       (let [id (or state-id (swap! *id inc))]
         {:state-id id
          :state-data (cache.wrapped/lookup-or-miss
-                      *cache-atom
+                      *cache
                       id
                       state-data-fn)}))))
 
 ;; Let us try it out with an LRU cache:
 (delay
-  (let [*cache-atom (cache.wrapped/lru-cache-factory
-                     {}
-                     {:threshold 20})
+  (let [*cache (cache.wrapped/lru-cache-factory
+                {}
+                {:threshold 20})
         ;; Compute state data and keep it in the cache.
         {:keys [state-id
                 state-data]} (cache-state-data!
-                              {:*cache-atom *cache-atom
+                              {:*cache *cache
                                :state-data-fn (fn [_]
                                                 (text->state-data
                                                  "What is the"))})
         ;; Use the cache a few more times.
         _ (dotimes [i 3]
             (cache-state-data!
-             {:*cache-atom *cache-atom
+             {:*cache *cache
               :state-data-fn (fn [_]
                                (text->state-data
                                 (str "What is " i)))}))
         ;; Retrieve our state data from the first call.
-        retrieved-state-data (-> {:*cache-atom *cache-atom
+        retrieved-state-data (-> {:*cache *cache
                                   :state-id state-id}
                                  cache-state-data!
                                  :state-data)]
@@ -217,7 +230,7 @@ by Alexander K. Lew, Tan Zhi-Xuan, Gabriel Grand, Vikash K. Mansinghka
                     :keys [llama-ctx
                            llama-ctx-state-id
                            trie
-                           *cache-atom
+                           *cache
                            tokens
                            path
                            sub-trie
@@ -237,7 +250,7 @@ by Alexander K. Lew, Tan Zhi-Xuan, Gabriel Grand, Vikash K. Mansinghka
           next-sub-trie (get-in sub-trie next-step)]
       (if (some->> next-sub-trie
                    :llama-state-id
-                   (cache.wrapped/has? *cache-atom))
+                   (cache.wrapped/has? *cache))
         ;; We have already created next-sub-trie in the past,
         ;; and we have its llama state still in the cache,
         ;; so let us step into it.
@@ -249,7 +262,7 @@ by Alexander K. Lew, Tan Zhi-Xuan, Gabriel Grand, Vikash K. Mansinghka
         ;; Else, we need to create the next sub trie.
         (let [{:keys [state-id state-data]}
               (cache-state-data!
-               {:*cache-atom *cache-atom
+               {:*cache *cache
                 :state-data-fn (fn [_]
 
                                  ;; Make sure the llama-ctx has the right state
@@ -268,7 +281,7 @@ by Alexander K. Lew, Tan Zhi-Xuan, Gabriel Grand, Vikash K. Mansinghka
                                        (not= llama-ctx-state-id))
                                    (->> sub-trie
                                         :llama-state-id
-                                        (cache.wrapped/lookup *cache-atom)
+                                        (cache.wrapped/lookup *cache)
                                         (raw/llama_set_state_data llama-ctx))
                                    ;; Otherwise, our current state is what we need.
                                    :else
@@ -296,62 +309,65 @@ by Alexander K. Lew, Tan Zhi-Xuan, Gabriel Grand, Vikash K. Mansinghka
                             :remaining-tokens (rest remaining-tokens)))))))))
 
 
-(defn new-context [{:keys [lru-params]}]
-  {:llama-ctx (->llama-ctx)
-   :trie {}
-   :*cache-atom (cache.wrapped/lru-cache-factory
-                 {}
-                 lru-params)})
+(defn new-context
+  ([]
+   (new-context {}))
+  ([{:keys [lru-params seed]
+     :or {lru-params {:threshold 50}
+          seed 12345}}]
+   (System/gc)
+   {:llama-ctx (->llama-ctx {:seed seed})
+    :trie {}
+    :*cache (cache.wrapped/lru-cache-factory
+             {}
+             lru-params)}))
 
-(defn cached-eval! [*context-atom tokens]
-  (let [context (-> @*context-atom
+(defn cached-eval! [*context tokens]
+  (let [context (-> @*context
                     (assoc :tokens tokens)
                     cached-eval)]
-    (reset! *context-atom
-            (select-keys context [:llama-ctx :*cache-atom :trie]))
+    (reset! *context
+            (select-keys context [:llama-ctx :*cache :trie]))
     context))
 
-(defn logits! [*context-atom tokens]
-  (-> *context-atom
+(defn logits! [*context tokens]
+  (-> *context
       (cached-eval! tokens)
       :sub-trie
       :logits))
 
 
 (delay
-  (let [*context-atom (atom (new-context {:lru-params {:threshold 20}}))]
+  (let [*context (atom (new-context))]
     (->> "How much wood would a"
          tokenize
-         (logits! *context-atom)
+         (logits! *context)
          argops/argmax
          token->str)))
 
 
 (delay
-  (let [*context-atom (atom (new-context {:lru-params {:threshold 50}}))]
+  (let [*context (atom (new-context))]
     (->> ["How much wood would a"
           "How much wood would a woodchuck"
           "How much wood would a woodchuck chuck"]
          (mapv (fn [text]
                  (->> text
                       tokenize
-                      (logits! *context-atom)
+                      (logits! *context)
                       argops/argmax
                       token->str
                       (vector (now))))))))
 
 ;; ## Sampling random tokens
 
-(defn ->sample-fn [*context-atom
-                   {:keys [logits seed]}]
-  (let [{:keys [llama-ctx]} @*context-atom
-        _ (raw/llama_set_rng_seed llama-ctx seed)]
-    (llama/init-mirostat-v2-sampler llama-ctx)))
+(defn ->sample-fn [*context]
+  (-> @*context
+      :llama-ctx
+      llama/init-mirostat-v2-sampler))
 
 (delay
-  (let [*context-atom (atom
-                       (new-context
-                        {:lru-params {:threshold 50}}))]
+  (let [*context (atom (new-context))]
     (->> ["How much wood would a"
           "How much wood would a woodchuck"
           "How much wood would a woodchuck chuck"]
@@ -359,12 +375,80 @@ by Alexander K. Lew, Tan Zhi-Xuan, Gabriel Grand, Vikash K. Mansinghka
           (fn [text]
             (let [logits (->> text
                               tokenize
-                              (logits! *context-atom))
-                  samplef (->> {:logits logits
-                                :seed 12345}
-                               (->sample-fn *context-atom))]
+                              (logits! *context))
+                  samplef (->sample-fn *context)]
               [text
                (->> (repeatedly
                      1000
                      #(untokenize [(samplef logits)]))
                     frequencies)]))))))
+
+(defn sample-once! [*context logits]
+  ((->sample-fn *context)
+   logits))
+
+(delay
+  (let [*context (atom (new-context))]
+    (->> "How much wood would a"
+         tokenize
+         (logits! *context)
+         (sample-once! *context)
+         vector
+         untokenize)))
+
+;; ## A probabilistic model
+
+;; The LLaMPPL paper defines a probabilistic model using
+;; an initial state $s_$,
+;; a Markove kernel $M$,
+;; and a potential function $G$.
+;;
+;; Here we are implmenting a specific model
+;; of the 'hard constraints' type:
+;; generating texts that use only short words.
+;;
+;; ### The Markov kernel
+;; We define M as a sampling step
+;; (which is the way we use it algorithmically).
+
+(defn M-step [*context
+              previous-tokens]
+  (->> previous-tokens
+       (logits! *context)
+       (sample-once! *context)
+       (conj previous-tokens)))
+
+
+(delay
+  (let [*context (atom (new-context))]
+    (->> #(->> "How much wood"
+               tokenize
+               (iterate (partial M-step *context))
+               (take 5)
+               last
+               untokenize)
+         (repeatedly 10)
+         vec)))
+
+(delay
+  (let [*context (atom (new-context))]
+    (->> #(->> "I'll just quote a poem."
+               tokenize
+               (iterate (partial M-step *context))
+               (take 50)
+               (filter finished?)
+               first
+               untokenize)
+         (repeatedly 1)
+         vec)))
+
+;; ### The potential function
+
+
+
+(defn G [threshold current-tokens]
+  (if (-> current-tokens
+          context/untokenize
+          (string/split  #" ")
+          (->> (every? #(-> % count (<= threshold)))))
+    1 0))
