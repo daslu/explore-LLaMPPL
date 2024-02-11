@@ -191,7 +191,7 @@ by Alexander K. Lew, Tan Zhi-Xuan, Gabriel Grand, Vikash K. Mansinghka
 (delay
   (let [*cache (cache.wrapped/fifo-cache-factory
                 {}
-                {:threshold 60})
+                {:threshold 20})
         ;; Compute state data and keep it in the cache.
         {:keys [state-id
                 state-data]} (cache-state-data!
@@ -230,12 +230,11 @@ by Alexander K. Lew, Tan Zhi-Xuan, Gabriel Grand, Vikash K. Mansinghka
                            tokens
                            path
                            sub-trie
-                           remaining-tokens
-                           num-threads-to-use]
+                           remaining-tokens]
                     :or {sub-trie trie
                          path []
                          remaining-tokens tokens
-                         num-threads-to-use (/ *num-threads* 2)}}]
+                         num-threads-to-use 8}}]
   (if (empty? remaining-tokens)
     ;; done - return this context
     context
@@ -439,10 +438,9 @@ by Alexander K. Lew, Tan Zhi-Xuan, Gabriel Grand, Vikash K. Mansinghka
     (->> #(->> "The Fed says"
                tokenize
                (iterate (partial M-step *context))
-               (take 30)
-               last
-               ((juxt finished?
-                      untokenize)))
+               (take 60)
+               (mapv (juxt finished?
+                           untokenize)))
          (repeatedly 2)
          vec)))
 
