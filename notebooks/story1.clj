@@ -133,93 +133,139 @@ by Alexander K. Lew, Tan Zhi-Xuan, Gabriel Grand, Vikash K. Mansinghka
 
 ;; ## Keeping and retrieving context state
 
-;; A function to get a copy of a given model-context's state
-;; (so that we can reuse the KV-cache later):
-(defn ctx->state-data [llama-ctx]
-  (let [size (raw/llama_get_state_size llama-ctx)
-        mem (byte-array size)]
-    (raw/llama_copy_state_data llama-ctx mem)
-    mem))
-
-(def base-state-data
-  (ctx->state-data base-llama-ctx))
+(def state-size
+  (-> base-llama-ctx
+      (raw/llama_get_state_size)))
 
 ;; How big is this state?
 (delay
-  (-> base-state-data
-      count
+  (-> state-size
       (/ MB)
       (->> (format "%.02f MB"))))
 
-;; A function to recreate a model-cotext from its state:
-(defn state-data->ctx [state-data]
-  (let [llama-ctx (->llama-ctx)]
-    (raw/llama_set_state_data llama-ctx state-data)
-    llama-ctx))
+;; Let us create a space to store a few such states:
+(def n-memories 70)
 
-;; A function to turn a piece of text to the corresponding
-;; model state data:
-(defn text->state-data [text]
-  (-> (->llama-ctx)
-      (llama/llama-update text)
-      ctx->state-data))
+(defonce memories
+  (vec (repeatedly n-memories #(byte-array state-size))))
 
-;; Example:
-;; Keep, retrieve, and reuse the state
 (delay
-  (-> "What is the"
-      text->state-data
-      state-data->ctx
-      llama/get-logits
-      argops/argmax
-      token->str))
+  (->> memories
+       (map count)
+       frequencies))
 
-;; ## Caching context states:
+
+(delay
+  (let [llama-ctx (->llama-ctx)
+        next-word (fn []
+                    (-> llama-ctx
+                        llama/get-logits
+                        argops/argmax
+                        vector
+                        untokenize))]
+    (-> llama-ctx
+        (llama/llama-update "How much wood")
+        time)
+    (-> llama-ctx
+        (raw/llama_copy_state_data (memories 3))
+        time)
+    (prn (next-word))
+    (-> llama-ctx
+        (llama/llama-update "How are you")
+        time)
+    (prn (next-word))
+    (-> llama-ctx
+        (raw/llama_set_state_data (memories 3))
+        time)
+    (prn (next-word))))
+
+
+(def new-fifo-cache
+  {:id->idx {}
+   :idx->id {}
+   :current-idx 0})
+
+
+(defn lookup-or-miss [*fifo-cache id mem-cpy-fn]
+  (let [{:keys [id->idx]} @*fifo-cache]
+    (or (some-> id
+                id->idx
+                memories)
+        (-> *fifo-cache
+            (swap! (fn [fifo-cache]
+                     (let [updated-fifo-cache
+                           (as-> fifo-cache fc
+                             (update fc :current-idx
+                                     (fn [idx] (-> idx inc (rem n-memories))))
+                             (update fc :id->idx dissoc ((:idx->id fc)
+                                                         (:current-idx fc)))
+                             (update fc :id->idx assoc id (:current-idx fc))
+                             (update fc :idx->id assoc (:current-idx fc) id))]
+                       (-> updated-fifo-cache
+                           :current-idx
+                           memories
+                           mem-cpy-fn)
+                       updated-fifo-cache)))
+            :current-idx
+            memories))))
+
 (def cache-state-data!
   (let [*id (atom 0)]
     (fn [{:keys [state-id
-                 state-data-fn
+                 llama-ctx-fn
                  *cache]}]
       (let [id (or state-id (swap! *id inc))]
         {:state-id id
-         :state-data (cache.wrapped/lookup-or-miss
+         :state-data (lookup-or-miss
                       *cache
                       id
-                      state-data-fn)}))))
+                      (fn [mem]
+                        (raw/llama_copy_state_data
+                         (llama-ctx-fn)
+                         mem)))}))))
 
-;; Let us try it out with a FIFO cache:
+
 (delay
-  (let [*cache (cache.wrapped/fifo-cache-factory
-                {}
-                {:threshold 20})
-        ;; Compute state data and keep it in the cache.
+  (let [llama-ctx (->llama-ctx)
+        next-word (fn []
+                    (-> llama-ctx
+                        llama/get-logits
+                        argops/argmax
+                        vector
+                        untokenize))
+        *cache (atom new-fifo-cache)
         {:keys [state-id
                 state-data]} (cache-state-data!
                               {:*cache *cache
-                               :state-data-fn (fn [_]
-                                                (text->state-data
-                                                 "What is the"))})
-        ;; Use the cache a few more times.
-        _ (dotimes [i 3]
-            (cache-state-data!
-             {:*cache *cache
-              :state-data-fn (fn [_]
-                               (text->state-data
-                                (str "What is " i)))}))
-        ;; Retrieve our state data from the first call.
-        retrieved-state-data (-> {:*cache *cache
-                                  :state-id state-id}
-                                 cache-state-data!
-                                 :state-data)]
-    ;; Make sure it is equals.
-    (java.util.Arrays/equals
-     ^bytes state-data
-     ^bytes retrieved-state-data)))
+                               :llama-ctx-fn #(llama/llama-update
+                                               llama-ctx
+                                               "How much wood")})]
+    (prn (next-word))
+    (cache-state-data!
+     {:*cache *cache
+      :llama-ctx-fn #(llama/llama-update
+                      llama-ctx
+                      "How are you")})
+    (prn (next-word))
+    (let [retrieved-state-data (-> {:*cache *cache
+                                    :state-id state-id}
+                                   cache-state-data!
+                                   :state-data)]
+      (prn
+       (java.util.Arrays/equals
+        ^bytes state-data
+        ^bytes retrieved-state-data))
+      (-> llama-ctx
+          (raw/llama_set_state_data
+           retrieved-state-data))
+      (prn (next-word)))))
+
+
+
 
 
 ;; ## A token-trie cache
 ;; (Section 3, Subsection "Shared Transformer cache" in the paper)
-
 
 
 (defn cached-eval [{:as context
@@ -267,18 +313,22 @@ by Alexander K. Lew, Tan Zhi-Xuan, Gabriel Grand, Vikash K. Mansinghka
                                    ;; When we are in the beginning of the path,
                                    ;; take the base state.
                                    (= path [])
-                                   (raw/llama_set_state_data llama-ctx
-                                                             base-state-data)
+                                   (do
+                                     (prn [:set-from-base])
+                                     (raw/llama_set_state_data llama-ctx
+                                                               base-state-data))
                                    ;; When the last evaluation does not fit
                                    ;; out place in the trie,
                                    ;; bring the reletant state from cache.
                                    (-> sub-trie
                                        :llama-state-id
                                        (not= llama-ctx-state-id))
-                                   (->> sub-trie
-                                        :llama-state-id
-                                        (cache.wrapped/lookup *cache)
-                                        (raw/llama_set_state_data llama-ctx))
+                                   (do
+                                     (prn [:set-from-cache])
+                                     (->> sub-trie
+                                          :llama-state-id
+                                          (cache.wrapped/lookup *cache)
+                                          (raw/llama_set_state_data llama-ctx)))
                                    ;; Otherwise, our current state is what we need.
                                    :else
                                    nil)
@@ -294,6 +344,7 @@ by Alexander K. Lew, Tan Zhi-Xuan, Gabriel Grand, Vikash K. Mansinghka
                                                       token
                                                       ;; num of threads
                                                       8))
+                                 (prn [:extract-state])
                                  (ctx->state-data llama-ctx))})
               ;; Create the next sub trie:
               new-sub-trie {:logits (llama/get-logits llama-ctx)
@@ -310,7 +361,7 @@ by Alexander K. Lew, Tan Zhi-Xuan, Gabriel Grand, Vikash K. Mansinghka
   ([]
    (new-context {}))
   ([{:keys [lru-params seed]
-     :or {lru-params {:threshold 20}
+     :or {lru-params {:threshold 10}
           seed 12345}}]
    (System/gc)
    (let [llama-ctx (->llama-ctx)
@@ -435,10 +486,21 @@ by Alexander K. Lew, Tan Zhi-Xuan, Gabriel Grand, Vikash K. Mansinghka
 
 (delay
   (let [*context (atom (new-context {:seed 1}))]
+    (->> #(->> "How much wood"
+               tokenize
+               (iterate (partial M-step *context))
+               (take 40)
+               last
+               untokenize)
+         (repeatedly 2)
+         vec)))
+
+(delay
+  (let [*context (atom (new-context {:seed 1}))]
     (->> #(->> "The Fed says"
                tokenize
                (iterate (partial M-step *context))
-               (take 60)
+               (take 40)
                (mapv (juxt finished?
                            untokenize)))
          (repeatedly 2)
