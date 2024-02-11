@@ -6,8 +6,8 @@
             [com.phronemophobic.llama.util :as llutil]
             [tech.v3.datatype.argops :as argops]
             [clojure.math :as math]
-            [clojure.core.cache :as cache]
-            [clojure.core.cache.wrapped :as cache.wrapped]
+            ;; [clojure.core.cache :as cache]
+            ;; [clojure.core.cache.wrapped :as cache.wrapped]
             [scicloj.kindly.v4.kind :as kind]
             [scicloj.kindly.v4.api :as kindly]
             [scicloj.noj.v1.vis.hanami :as hanami]
@@ -143,6 +143,11 @@ by Alexander K. Lew, Tan Zhi-Xuan, Gabriel Grand, Vikash K. Mansinghka
       (/ MB)
       (->> (format "%.02f MB"))))
 
+(def base-state-data
+  (let [mem (byte-array state-size)]
+    (raw/llama_copy_state_data base-llama-ctx mem)
+    mem))
+
 ;; Let us create a space to store a few such states:
 (def n-memories 70)
 
@@ -180,7 +185,7 @@ by Alexander K. Lew, Tan Zhi-Xuan, Gabriel Grand, Vikash K. Mansinghka
     (prn (next-word))))
 
 
-(def new-fifo-cache
+(defn new-fifo-cache []
   {:id->idx {}
    :idx->id {}
    :current-idx 0})
@@ -209,6 +214,17 @@ by Alexander K. Lew, Tan Zhi-Xuan, Gabriel Grand, Vikash K. Mansinghka
             :current-idx
             memories))))
 
+(defn has? [*fifo-cache id]
+  (-> @*fifo-cache
+      :id->idx
+      (get id)))
+
+(defn lookup [*fifo-cache id]
+  (-> @*fifo-cache
+      :id->idx
+      (get id)
+      memories))
+
 (def cache-state-data!
   (let [*id (atom 0)]
     (fn [{:keys [state-id
@@ -233,7 +249,7 @@ by Alexander K. Lew, Tan Zhi-Xuan, Gabriel Grand, Vikash K. Mansinghka
                         argops/argmax
                         vector
                         untokenize))
-        *cache (atom new-fifo-cache)
+        *cache (atom (new-fifo-cache))
         {:keys [state-id
                 state-data]} (cache-state-data!
                               {:*cache *cache
@@ -247,10 +263,7 @@ by Alexander K. Lew, Tan Zhi-Xuan, Gabriel Grand, Vikash K. Mansinghka
                       llama-ctx
                       "How are you")})
     (prn (next-word))
-    (let [retrieved-state-data (-> {:*cache *cache
-                                    :state-id state-id}
-                                   cache-state-data!
-                                   :state-data)]
+    (let [retrieved-state-data (lookup *cache state-id)]
       (prn
        (java.util.Arrays/equals
         ^bytes state-data
@@ -292,7 +305,7 @@ by Alexander K. Lew, Tan Zhi-Xuan, Gabriel Grand, Vikash K. Mansinghka
           next-sub-trie (get-in sub-trie next-step)]
       (if (some->> next-sub-trie
                    :llama-state-id
-                   (cache.wrapped/has? *cache))
+                   (has? *cache))
         ;; We have already created next-sub-trie in the past,
         ;; and we have its llama state still in the cache,
         ;; so let us step into it.
@@ -305,47 +318,46 @@ by Alexander K. Lew, Tan Zhi-Xuan, Gabriel Grand, Vikash K. Mansinghka
         (let [{:keys [state-id state-data]}
               (cache-state-data!
                {:*cache *cache
-                :state-data-fn (fn [_]
-
-                                 ;; Make sure the llama-ctx has the right state
-                                 ;; to continue.
-                                 (cond
-                                   ;; When we are in the beginning of the path,
-                                   ;; take the base state.
-                                   (= path [])
-                                   (do
-                                     (prn [:set-from-base])
-                                     (raw/llama_set_state_data llama-ctx
-                                                               base-state-data))
-                                   ;; When the last evaluation does not fit
-                                   ;; out place in the trie,
-                                   ;; bring the reletant state from cache.
-                                   (-> sub-trie
-                                       :llama-state-id
-                                       (not= llama-ctx-state-id))
-                                   (do
-                                     (prn [:set-from-cache])
-                                     (->> sub-trie
-                                          :llama-state-id
-                                          (cache.wrapped/lookup *cache)
-                                          (raw/llama_set_state_data llama-ctx)))
-                                   ;; Otherwise, our current state is what we need.
-                                   :else
-                                   nil)
-                                 ;; Evaluate the current token:
-                                 (prn [:eval
-                                       (->> path
-                                            (filter number?)
-                                            untokenize)
-                                       '-->
-                                       (untokenize [token])])
-                                 (time
-                                  (llama/llama-update llama-ctx
-                                                      token
-                                                      ;; num of threads
-                                                      8))
-                                 (prn [:extract-state])
-                                 (ctx->state-data llama-ctx))})
+                :llama-ctx-fn (fn []
+                                ;; Make sure the llama-ctx has the right state
+                                ;; to continue.
+                                (cond
+                                  ;; When we are in the beginning of the path,
+                                  ;; take the base state.
+                                  (= path [])
+                                  (do
+                                    (prn [:set-from-base])
+                                    (raw/llama_set_state_data llama-ctx
+                                                              base-state-data))
+                                  ;; When the last evaluation does not fit
+                                  ;; out place in the trie,
+                                  ;; bring the reletant state from cache.
+                                  (-> sub-trie
+                                      :llama-state-id
+                                      (not= llama-ctx-state-id))
+                                  (do
+                                    (prn [:set-from-cache])
+                                    (->> sub-trie
+                                         :llama-state-id
+                                         (lookup *cache)
+                                         (raw/llama_set_state_data llama-ctx)))
+                                  ;; Otherwise, our current state is what we need.
+                                  :else
+                                  nil)
+                                ;; Evaluate the current token:
+                                (prn [:eval
+                                      (->> path
+                                           (filter number?)
+                                           untokenize)
+                                      '-->
+                                      (untokenize [token])])
+                                (time
+                                 (llama/llama-update llama-ctx
+                                                     token
+                                                     ;; num of threads
+                                                     8))
+                                (prn [:extract-state])
+                                llama-ctx)})
               ;; Create the next sub trie:
               new-sub-trie {:logits (llama/get-logits llama-ctx)
                             :llama-state-id state-id}]
@@ -360,9 +372,8 @@ by Alexander K. Lew, Tan Zhi-Xuan, Gabriel Grand, Vikash K. Mansinghka
 (defn new-context
   ([]
    (new-context {}))
-  ([{:keys [lru-params seed]
-     :or {lru-params {:threshold 10}
-          seed 12345}}]
+  ([{:keys [seed]
+     :or {seed 12345}}]
    (System/gc)
    (let [llama-ctx (->llama-ctx)
          samplef (llama/init-mirostat-v2-sampler
@@ -372,9 +383,7 @@ by Alexander K. Lew, Tan Zhi-Xuan, Gabriel Grand, Vikash K. Mansinghka
      {:llama-ctx llama-ctx
       :samplef samplef
       :trie {}
-      :*cache (cache.wrapped/lru-cache-factory
-               {}
-               lru-params)})))
+      :*cache (atom (new-fifo-cache))})))
 
 (defn cached-eval! [*context tokens]
   (let [context (-> @*context
