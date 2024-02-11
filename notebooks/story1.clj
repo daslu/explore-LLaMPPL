@@ -233,8 +233,7 @@ by Alexander K. Lew, Tan Zhi-Xuan, Gabriel Grand, Vikash K. Mansinghka
                            remaining-tokens]
                     :or {sub-trie trie
                          path []
-                         remaining-tokens tokens
-                         num-threads-to-use 8}}]
+                         remaining-tokens tokens}}]
   (if (empty? remaining-tokens)
     ;; done - return this context
     context
@@ -293,7 +292,8 @@ by Alexander K. Lew, Tan Zhi-Xuan, Gabriel Grand, Vikash K. Mansinghka
                                  (time
                                   (llama/llama-update llama-ctx
                                                       token
-                                                      num-threads-to-use))
+                                                      ;; num of threads
+                                                      8))
                                  (ctx->state-data llama-ctx))})
               ;; Create the next sub trie:
               new-sub-trie {:logits (llama/get-logits llama-ctx)
