@@ -422,7 +422,7 @@ by Alexander K. Lew, Tan Zhi-Xuan, Gabriel Grand, Vikash K. Mansinghka
                     (assoc :tokens tokens)
                     cached-eval)]
     (reset! *context
-            (select-keys context [:llama-ctx :*cache :samplef :trie]))
+            (select-keys context [:llama-ctx :*cache :samplef :trie :sub-trie]))
     context))
 
 (defn logits! [*context tokens]
