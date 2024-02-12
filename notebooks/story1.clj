@@ -380,7 +380,11 @@ by Alexander K. Lew, Tan Zhi-Xuan, Gabriel Grand, Vikash K. Mansinghka
                                   (time
                                    (llama/llama-update llama-ctx
                                                        token
-                                                       ;; num of threads
+                                                       ;; n-past
+                                                       (->> path
+                                                            (filter number?)
+                                                            count)
+                                                       ;; num-threads
                                                        8))
                                   (prn [:extract-state])
                                   llama-ctx)})
