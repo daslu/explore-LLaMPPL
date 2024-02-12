@@ -13,7 +13,8 @@
             [scicloj.noj.v1.vis.hanami :as hanami]
             [aerial.hanami.templates :as ht]
             [tablecloth.api :as tc]
-            [clojure.string :as str]))
+            [clojure.string :as str]
+            [clojure.walk :as walk]))
 
 (def md
   (comp kindly/hide-code kind/md))
@@ -51,15 +52,23 @@ by Alexander K. Lew, Tan Zhi-Xuan, Gabriel Grand, Vikash K. Mansinghka
 (md "We will use [llama.clj](https://github.com/phronmophobic/llama.clj), a Clojure wrapper of llama.cpp.")
 
 ;; Create a new model context:
-(defn ->llama-ctx []
+(defn new-llama-ctx []
   (llama/create-context
    llama7b-path
    {:use-mlock true}))
 
+(delay
+  (let [llama-ctx (new-llama-ctx)]
+    (-> llama-ctx
+        (llama/llama-update "How much wood would a")
+        llama/get-logits
+        argops/argmax
+        token->str)))
+
 ;; A copy of an empty model
 ;; (to extract basic information):
 (def base-llama-ctx
-  (->llama-ctx))
+  (new-llama-ctx))
 
 ;; A function to turn a String of text to a list of tokens:
 (defn tokenize [text]
@@ -107,13 +116,13 @@ by Alexander K. Lew, Tan Zhi-Xuan, Gabriel Grand, Vikash K. Mansinghka
 ;; Example:
 ;; Getting next-token logits for a given sequence of tokens.
 (delay
-  (-> (->llama-ctx)
+  (-> (new-llama-ctx)
       (llama/llama-update "What is the") ; Note this is **mutating** the context
       llama/get-logits
       (->> (take 5))))
 
 (delay
-  (-> (->llama-ctx)
+  (-> (new-llama-ctx)
       (llama/llama-update "What is the")
       llama/get-logits
       (->> (hash-map :logit))
@@ -124,7 +133,7 @@ by Alexander K. Lew, Tan Zhi-Xuan, Gabriel Grand, Vikash K. Mansinghka
 ;; Example:
 ;; Getting the most probable next-token:
 (delay
-  (let [llama-ctx (->llama-ctx)]
+  (let [llama-ctx (new-llama-ctx)]
     (-> llama-ctx
         (llama/llama-update "What is the")
         llama/get-logits
@@ -149,7 +158,7 @@ by Alexander K. Lew, Tan Zhi-Xuan, Gabriel Grand, Vikash K. Mansinghka
     mem))
 
 ;; Let us create a space to store a few such states:
-(def n-memories 70)
+(def n-memories 10)
 
 (defonce memories
   (vec (repeatedly n-memories #(byte-array state-size))))
@@ -161,7 +170,7 @@ by Alexander K. Lew, Tan Zhi-Xuan, Gabriel Grand, Vikash K. Mansinghka
 
 
 (delay
-  (let [llama-ctx (->llama-ctx)
+  (let [llama-ctx (new-llama-ctx)
         next-word (fn []
                     (-> llama-ctx
                         llama/get-logits
@@ -217,9 +226,11 @@ by Alexander K. Lew, Tan Zhi-Xuan, Gabriel Grand, Vikash K. Mansinghka
 (defn has? [*fifo-cache id]
   (-> @*fifo-cache
       :id->idx
-      (get id)))
+      (contains? id)))
 
 (defn lookup [*fifo-cache id]
+  (prn [@*fifo-cache
+        id])
   (-> @*fifo-cache
       :id->idx
       (get id)
@@ -242,7 +253,7 @@ by Alexander K. Lew, Tan Zhi-Xuan, Gabriel Grand, Vikash K. Mansinghka
 
 
 (delay
-  (let [llama-ctx (->llama-ctx)
+  (let [llama-ctx (new-llama-ctx)
         next-word (fn []
                     (-> llama-ctx
                         llama/get-logits
@@ -250,6 +261,13 @@ by Alexander K. Lew, Tan Zhi-Xuan, Gabriel Grand, Vikash K. Mansinghka
                         vector
                         untokenize))
         *cache (atom (new-fifo-cache))
+        _ (dotimes [i 15]
+            (cache-state-data!
+             {:*cache *cache
+              :llama-ctx-fn #(llama/llama-update
+                              llama-ctx
+                              "How are you")})
+            (prn (next-word)))
         {:keys [state-id
                 state-data]} (cache-state-data!
                               {:*cache *cache
@@ -257,12 +275,13 @@ by Alexander K. Lew, Tan Zhi-Xuan, Gabriel Grand, Vikash K. Mansinghka
                                                llama-ctx
                                                "How much wood")})]
     (prn (next-word))
-    (cache-state-data!
-     {:*cache *cache
-      :llama-ctx-fn #(llama/llama-update
-                      llama-ctx
-                      "How are you")})
-    (prn (next-word))
+    (dotimes [i 3]
+      (cache-state-data!
+       {:*cache *cache
+        :llama-ctx-fn #(llama/llama-update
+                        llama-ctx
+                        "How are you")})
+      (prn (next-word)))
     (let [retrieved-state-data (lookup *cache state-id)]
       (prn
        (java.util.Arrays/equals
@@ -293,81 +312,89 @@ by Alexander K. Lew, Tan Zhi-Xuan, Gabriel Grand, Vikash K. Mansinghka
                     :or {sub-trie trie
                          path []
                          remaining-tokens tokens}}]
-  (if (empty? remaining-tokens)
-    ;; done - return this context
-    context
-    ;; else
-    (let [token (first remaining-tokens)
-          ;; Look into the next sub trie,
-          ;; following this token:
-          next-step [:children token]
-          next-path (concat path next-step)
-          next-sub-trie (get-in sub-trie next-step)]
-      (if (some->> next-sub-trie
-                   :llama-state-id
-                   (has? *cache))
-        ;; We have already created next-sub-trie in the past,
-        ;; and we have its llama state still in the cache,
-        ;; so let us step into it.
-        (recur (-> context
-                   (assoc
-                    :sub-trie next-sub-trie
-                    :path next-path
-                    :remaining-tokens (rest remaining-tokens))))
-        ;; Else, we need to create the next sub trie.
-        (let [{:keys [state-id state-data]}
-              (cache-state-data!
-               {:*cache *cache
-                :llama-ctx-fn (fn []
-                                ;; Make sure the llama-ctx has the right state
-                                ;; to continue.
-                                (cond
-                                  ;; When we are in the beginning of the path,
-                                  ;; take the base state.
-                                  (= path [])
-                                  (do
-                                    (prn [:set-from-base])
-                                    (raw/llama_set_state_data llama-ctx
-                                                              base-state-data))
-                                  ;; When the last evaluation does not fit
-                                  ;; out place in the trie,
-                                  ;; bring the reletant state from cache.
-                                  (-> sub-trie
-                                      :llama-state-id
-                                      (not= llama-ctx-state-id))
-                                  (do
-                                    (prn [:set-from-cache])
-                                    (->> sub-trie
-                                         :llama-state-id
-                                         (lookup *cache)
-                                         (raw/llama_set_state_data llama-ctx)))
-                                  ;; Otherwise, our current state is what we need.
-                                  :else
-                                  nil)
-                                ;; Evaluate the current token:
-                                (prn [:eval
-                                      (->> path
-                                           (filter number?)
-                                           untokenize)
-                                      '-->
-                                      (untokenize [token])])
-                                (time
-                                 (llama/llama-update llama-ctx
-                                                     token
-                                                     ;; num of threads
-                                                     8))
-                                (prn [:extract-state])
-                                llama-ctx)})
-              ;; Create the next sub trie:
-              new-sub-trie {:logits (llama/get-logits llama-ctx)
-                            :llama-state-id state-id}]
-          ;; Step into the next sub trie:
-          (recur (-> context
-                     (update :trie assoc-in next-path new-sub-trie)
-                     (assoc :llama-ctx-state-id state-id
-                            :sub-trie new-sub-trie
-                            :path next-path
-                            :remaining-tokens (rest remaining-tokens)))))))))
+  (let [path->text (fn [path]
+                     (->> path
+                          (filter number?)
+                          untokenize))]
+    (if (empty? remaining-tokens)
+      ;; done - return this context
+      (do
+        (prn [:done (path->text path)])
+        context)
+      ;; else
+      (let [token (first remaining-tokens)
+            ;; Look into the next sub trie,
+            ;; following this token:
+            next-step [:children token]
+            next-path (concat path next-step)
+            next-sub-trie (get-in sub-trie next-step)]
+        (if (some->> next-sub-trie
+                     :llama-state-id
+                     (has? *cache))
+          ;; We have already created next-sub-trie in the past,
+          ;; and we have its llama state still in the cache,
+          ;; so let us step into it.
+          (do
+            (prn [:recur-known (path->text next-path)])
+            (recur (-> context
+                       (assoc
+                        :sub-trie next-sub-trie
+                        :path next-path
+                        :remaining-tokens (rest remaining-tokens)))))
+          ;; Else, we need to create the next sub trie.
+          (let [{:keys [state-id state-data]}
+                (cache-state-data!
+                 {:*cache *cache
+                  :llama-ctx-fn (fn []
+                                  ;; Make sure the llama-ctx has the right state
+                                  ;; to continue.
+                                  (cond
+                                    ;; When we are in the beginning of the path,
+                                    ;; take the base state.
+                                    (= path [])
+                                    (do
+                                      (prn [:set-from-base])
+                                      (raw/llama_set_state_data llama-ctx
+                                                                base-state-data))
+                                    ;; When the last evaluation does not fit
+                                    ;; out place in the trie,
+                                    ;; bring the reletant state from cache.
+                                    (-> sub-trie
+                                        :llama-state-id
+                                        (not= llama-ctx-state-id))
+                                    (do
+                                      (prn [:set-from-cache])
+                                      (->> sub-trie
+                                           :llama-state-id
+                                           (lookup *cache)
+                                           (raw/llama_set_state_data llama-ctx)))
+                                    ;; Otherwise, our current state is what we need.
+                                    :else
+                                    (prn [:continue]))
+                                  ;; Evaluate the current token:
+                                  (prn [:eval
+                                        (path->text path)
+                                        '-->
+                                        (untokenize [token])])
+                                  (time
+                                   (llama/llama-update llama-ctx
+                                                       token
+                                                       ;; num of threads
+                                                       8))
+                                  (prn [:extract-state])
+                                  llama-ctx)})
+                ;; Create the next sub trie:
+                new-sub-trie {:logits (llama/get-logits llama-ctx)
+                              :llama-state-id state-id}]
+            ;; Step into the next sub trie:
+            (do (prn [:recur-new (path->text next-path)])
+                (recur (-> context
+                           (update :trie assoc-in next-path new-sub-trie)
+                           (assoc :llama-ctx-state-id state-id
+                                  :sub-trie new-sub-trie
+                                  :path next-path
+                                  :remaining-tokens (rest remaining-tokens)))))))))))
+
 
 (defn new-context
   ([]
@@ -375,7 +402,7 @@ by Alexander K. Lew, Tan Zhi-Xuan, Gabriel Grand, Vikash K. Mansinghka
   ([{:keys [seed]
      :or {seed 12345}}]
    (System/gc)
-   (let [llama-ctx (->llama-ctx)
+   (let [llama-ctx (new-llama-ctx)
          samplef (llama/init-mirostat-v2-sampler
                   llama-ctx)]
      (prn [:seed seed])
@@ -399,7 +426,6 @@ by Alexander K. Lew, Tan Zhi-Xuan, Gabriel Grand, Vikash K. Mansinghka
       :sub-trie
       :logits))
 
-
 (delay
   (let [*context (atom (new-context))]
     (->> "How much wood would a"
@@ -407,6 +433,74 @@ by Alexander K. Lew, Tan Zhi-Xuan, Gabriel Grand, Vikash K. Mansinghka
          (logits! *context)
          argops/argmax
          token->str)))
+
+(def example-context
+  (let [*context (atom (new-context))]
+    (->> "How much wood would a"
+         tokenize
+         (cached-eval! *context))
+    @*context))
+
+(delay
+  (let [{:keys [*cache trie]} example-context
+        *node-id (atom 0)
+        *nodes (atom [{:data {:id "0"}}])
+        *edges (atom [])
+        trie (-> trie
+                 (assoc :node-id (str @*node-id))
+                 (->> (walk/prewalk
+                       (fn [v]
+                         (if (:logits v)
+                           (let [node-id (str (swap! *node-id inc))]
+                             (swap! *nodes conj {:data {:id node-id
+                                                        :token (-> v
+                                                                   )}})
+                             (-> v
+                                 (assoc :logits :logits)
+                                 (assoc :node-id node-id)))
+                           v)))
+                      (walk/prewalk
+                       (fn [v]
+                         (if-let [{:keys [node-id]} v]
+                           (do
+                             (->> v
+                                  :children
+                                  vals
+                                  (map
+                                   (fn [child]
+                                     (let [child-node-id (:node-id child)]
+                                       {:data {:id (str node-id "-" child-node-id)
+                                               :source node-id
+                                               :target child-node-id}})))
+                                  (swap! *edges concat))
+                             v)
+                           v)))))]
+    (kind/cytoscape
+     {:elements {:nodes @*nodes
+                 :edges @*edges}
+      :style [{:selector "node"
+               :css {:content "data(token)"
+                     :text-valign "center"
+                     :text-halign "center"}}
+              {:selector "edge"
+               :css {:curve-style "bezier"
+                     :target-arrow-shape "triangle"}}]})))
+
+
+(delay
+  (let [*context (atom (new-context))]
+    (->> ["How"
+          "How much"
+          "How much wood"
+          "How much wood would"
+          "How much wood would a"]
+         (mapv (fn [prefix]
+                 [prefix
+                  (->> prefix
+                       tokenize
+                       (logits! *context)
+                       argops/argmax
+                       token->str)])))))
 
 
 (delay
