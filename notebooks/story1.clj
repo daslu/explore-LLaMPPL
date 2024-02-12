@@ -433,28 +433,14 @@ by Alexander K. Lew, Tan Zhi-Xuan, Gabriel Grand, Vikash K. Mansinghka
 
 (delay
   (let [*context (atom (new-context))]
-    (->> "How much wood would a"
+    (->> "How much wood"
          tokenize
          (logits! *context)
          argops/argmax
          token->str)))
 
-(def example-context
-  (let [*context (atom (new-context))]
-    (->> ["How much wood would a"
-          "How much is it"
-          "How are"
-          "Roses are"
-          "This is very"]
-         (run! (fn [text]
-                 (->> text
-                      tokenize
-                      (cached-eval! *context)))))
-    @*context))
-
-
-(delay
-  (let [{:keys [*cache trie]} example-context
+(defn visualize-trie [context]
+  (let [{:keys [*cache trie]} context
         *node-id (atom 0)
         *nodes (atom [{:data {:id "0" :word "(root)"}}])
         *edges (atom [])
@@ -521,6 +507,19 @@ by Alexander K. Lew, Tan Zhi-Xuan, Gabriel Grand, Vikash K. Mansinghka
                :css {:curve-style "bezier"
                      :target-arrow-shape "triangle"}}]
       :layout {:name "cose"}})))
+
+(delay
+  (let [*context (atom (new-context))]
+    (->> ["How much wood would a"
+          "How much is it"
+          "How are"
+          "Roses are"
+          "This is very"]
+         (run! (fn [text]
+                 (->> text
+                      tokenize
+                      (cached-eval! *context)))))
+    (visualize-trie @*context)))
 
 
 (delay
