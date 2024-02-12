@@ -440,80 +440,81 @@ by Alexander K. Lew, Tan Zhi-Xuan, Gabriel Grand, Vikash K. Mansinghka
 
 (def example-context
   (let [*context (atom (new-context))]
-    (->> "How much wood would a"
-         tokenize
-         (cached-eval! *context))
-    (->> "How much is it"
-         tokenize
-         (cached-eval! *context))
-    (->> "How are"
-         tokenize
-         (cached-eval! *context))
+    (->> ["How much wood would a"
+          "How much is it"
+          "How are"
+          "Roses are"
+          "This is very"]
+         (run! (fn [text]
+                 (->> text
+                      tokenize
+                      (cached-eval! *context)))))
     @*context))
 
 
-(let [{:keys [*cache trie]} example-context
-      *node-id (atom 0)
-      *nodes (atom [{:data {:id "0" :word "(root)"}}])
-      *edges (atom [])
-      trie (-> trie
-               (assoc :node-id (str @*node-id))
-               (->> (walk/prewalk
-                     (fn [v]
-                       (if (:children v)
-                         (-> v
-                             (update :children
-                                     (fn [children]
-                                       (->> children
-                                            (map (fn [[token child]]
-                                                   (let [node-id (str (swap! *node-id inc))]
-                                                     (swap! *nodes conj {:data {:id node-id
-                                                                                :token token
-                                                                                :word (untokenize [token])
-                                                                                :background (if (->> child
-                                                                                                     :llama-state-id
-                                                                                                     (has? *cache))
-                                                                                              "lightgreen"
-                                                                                              "lightgrey")}})
-                                                     [token (-> child
-                                                                (assoc :node-id node-id))])))
-                                            (into {})))))
-                         v)))
-                    (walk/prewalk (fn [v]
-                                    (if (:logits v)
-                                      (dissoc v :logits)
-                                      v)))
-                    (walk/prewalk
-                     (fn [v]
-                       (if-let [{:keys [node-id]} v]
-                         (do
-                           (->> v
-                                :children
-                                vals
-                                (map
-                                 (fn [child]
-                                   (let [child-node-id (:node-id child)]
-                                     {:data {:id (str node-id "-" child-node-id)
-                                             :source node-id
-                                             :target child-node-id}})))
-                                (swap! *edges concat))
-                           v)
-                         v)))))]
-  (kind/cytoscape
-   { ;:trie trie
-    :elements {:nodes @*nodes
-               :edges @*edges}
-    :style [{:selector "node"
-             :css {:content "data(word)"
-                   :text-valign "center"
-                   :text-halign "center"
-                   :height 50
-                   :width 50
-                   :background-color "data(background)"}}
-            {:selector "edge"
-             :css {:curve-style "bezier"
-                   :target-arrow-shape "triangle"}}]
-    :layout {:name "cose"}}))
+(delay
+  (let [{:keys [*cache trie]} example-context
+        *node-id (atom 0)
+        *nodes (atom [{:data {:id "0" :word "(root)"}}])
+        *edges (atom [])
+        trie (-> trie
+                 (assoc :node-id (str @*node-id))
+                 (->> (walk/prewalk
+                       (fn [v]
+                         (if (:children v)
+                           (-> v
+                               (update :children
+                                       (fn [children]
+                                         (->> children
+                                              (map (fn [[token child]]
+                                                     (let [node-id (str (swap! *node-id inc))]
+                                                       (swap! *nodes conj {:data {:id node-id
+                                                                                  :token token
+                                                                                  :word (untokenize [token])
+                                                                                  :background (if (->> child
+                                                                                                       :llama-state-id
+                                                                                                       (has? *cache))
+                                                                                                "lightgreen"
+                                                                                                "lightgrey")}})
+                                                       [token (-> child
+                                                                  (assoc :node-id node-id))])))
+                                              (into {})))))
+                           v)))
+                      (walk/prewalk (fn [v]
+                                      (if (:logits v)
+                                        (dissoc v :logits)
+                                        v)))
+                      (walk/prewalk
+                       (fn [v]
+                         (if-let [{:keys [node-id]} v]
+                           (do
+                             (->> v
+                                  :children
+                                  vals
+                                  (map
+                                   (fn [child]
+                                     (let [child-node-id (:node-id child)]
+                                       {:data {:id (str node-id "-" child-node-id)
+                                               :source node-id
+                                               :target child-node-id}})))
+                                  (swap! *edges concat))
+                             v)
+                           v)))))]
+    (kind/cytoscape
+     { ;:trie trie
+      :elements {:nodes @*nodes
+                 :edges @*edges}
+      :style [{:selector "node"
+               :css {:content "data(word)"
+                     :text-valign "center"
+                     :text-halign "center"
+                     :height 50
+                     :width 50
+                     :background-color "data(background)"}}
+              {:selector "edge"
+               :css {:curve-style "bezier"
+                     :target-arrow-shape "triangle"}}]
+      :layout {:name "cose"}})))
 
 
 (delay
