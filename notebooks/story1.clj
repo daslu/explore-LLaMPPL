@@ -6,8 +6,6 @@
             [com.phronemophobic.llama.util :as llutil]
             [tech.v3.datatype.argops :as argops]
             [clojure.math :as math]
-            ;; [clojure.core.cache :as cache]
-            ;; [clojure.core.cache.wrapped :as cache.wrapped]
             [scicloj.kindly.v4.kind :as kind]
             [scicloj.kindly.v4.api :as kindly]
             [scicloj.noj.v1.vis.hanami :as hanami]
@@ -204,7 +202,7 @@ by Alexander K. Lew, Tan Zhi-Xuan, Gabriel Grand, Vikash K. Mansinghka
    :current-idx 0})
 
 
-(defn lookup-or-miss [*fifo-cache id mem-cpy-fn]
+(defn lookup-or-miss!-impl [*fifo-cache id mem-cpy-fn]
   (let [{:keys [id->idx]} @*fifo-cache]
     (or (some-> id
                 id->idx
@@ -227,33 +225,34 @@ by Alexander K. Lew, Tan Zhi-Xuan, Gabriel Grand, Vikash K. Mansinghka
             :current-idx
             memories))))
 
-(defn has? [*fifo-cache id]
-  (-> @*fifo-cache
-      :id->idx
-      (contains? id)))
-
-(defn lookup [*fifo-cache id]
-  (prn [@*fifo-cache
-        id])
-  (-> @*fifo-cache
-      :id->idx
-      (get id)
-      memories))
-
-(def cache-state-data!
+(def lookup-or-miss!
   (let [*id (atom 0)]
     (fn [{:keys [state-id
                  llama-ctx-fn
                  *cache]}]
       (let [id (or state-id (swap! *id inc))]
         {:state-id id
-         :state-data (lookup-or-miss
+         :state-data (lookup-or-miss!-impl
                       *cache
                       id
                       (fn [mem]
                         (raw/llama_copy_state_data
                          (llama-ctx-fn)
                          mem)))}))))
+
+(defn has? [*fifo-cache id]
+  (-> @*fifo-cache
+      :id->idx
+      (contains? id)))
+
+(defn lookup [*fifo-cache id]
+  #_(prn [@*fifo-cache id])
+  (-> @*fifo-cache
+      :id->idx
+      (get id)
+      memories))
+
+
 
 
 (delay
@@ -266,21 +265,21 @@ by Alexander K. Lew, Tan Zhi-Xuan, Gabriel Grand, Vikash K. Mansinghka
                         untokenize))
         *cache (atom (new-fifo-cache))
         _ (dotimes [i 15]
-            (cache-state-data!
+            (lookup-or-miss!
              {:*cache *cache
               :llama-ctx-fn #(llama/llama-update
                               llama-ctx
                               "How are you")})
             (prn (next-word)))
         {:keys [state-id
-                state-data]} (cache-state-data!
+                state-data]} (lookup-or-miss!
                               {:*cache *cache
                                :llama-ctx-fn #(llama/llama-update
                                                llama-ctx
                                                "How much wood")})]
     (prn (next-word))
     (dotimes [i 3]
-      (cache-state-data!
+      (lookup-or-miss!
        {:*cache *cache
         :llama-ctx-fn #(llama/llama-update
                         llama-ctx
@@ -295,8 +294,6 @@ by Alexander K. Lew, Tan Zhi-Xuan, Gabriel Grand, Vikash K. Mansinghka
           (raw/llama_set_state_data
            retrieved-state-data))
       (prn (next-word)))))
-
-
 
 
 
@@ -347,7 +344,7 @@ by Alexander K. Lew, Tan Zhi-Xuan, Gabriel Grand, Vikash K. Mansinghka
                         :remaining-tokens (rest remaining-tokens)))))
           ;; Else, we need to create the next sub trie.
           (let [{:keys [state-id state-data]}
-                (cache-state-data!
+                (lookup-or-miss!
                  {:*cache *cache
                   :llama-ctx-fn (fn []
                                   ;; Make sure the llama-ctx has the right state
@@ -463,22 +460,27 @@ by Alexander K. Lew, Tan Zhi-Xuan, Gabriel Grand, Vikash K. Mansinghka
                        (fn [v]
                          (if (:children v)
                            (-> v
-                               (update :children
-                                       (fn [children]
-                                         (->> children
-                                              (map (fn [[token child]]
-                                                     (let [node-id (str (swap! *node-id inc))]
-                                                       (swap! *nodes conj {:data {:id node-id
-                                                                                  :token token
-                                                                                  :word (untokenize [token])
-                                                                                  :background (if (->> child
-                                                                                                       :llama-state-id
-                                                                                                       (has? *cache))
-                                                                                                "lightgreen"
-                                                                                                "lightgrey")}})
-                                                       [token (-> child
-                                                                  (assoc :node-id node-id))])))
-                                              (into {})))))
+                               (update
+                                :children
+                                (fn [children]
+                                  (->> children
+                                       (map
+                                        (fn [[token child]]
+                                          (let [node-id (str (swap! *node-id inc))]
+                                            (swap!
+                                             *nodes
+                                             conj
+                                             {:data {:id node-id
+                                                     :token token
+                                                     :word (untokenize [token])
+                                                     :background (if (->> child
+                                                                          :llama-state-id
+                                                                          (has? *cache))
+                                                                   "lightgreen"
+                                                                   "lightgrey")}})
+                                            [token (-> child
+                                                       (assoc :node-id node-id))])))
+                                       (into {})))))
                            v)))
                       (walk/prewalk (fn [v]
                                       (if (:logits v)
@@ -501,7 +503,7 @@ by Alexander K. Lew, Tan Zhi-Xuan, Gabriel Grand, Vikash K. Mansinghka
                              v)
                            v)))))]
     (kind/cytoscape
-     { ;:trie trie
+     {;:trie trie
       :elements {:nodes @*nodes
                  :edges @*edges}
       :style [{:selector "node"
