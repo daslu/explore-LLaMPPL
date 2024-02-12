@@ -451,6 +451,7 @@ by Alexander K. Lew, Tan Zhi-Xuan, Gabriel Grand, Vikash K. Mansinghka
          (cached-eval! *context))
     @*context))
 
+
 (let [{:keys [*cache trie]} example-context
       *node-id (atom 0)
       *nodes (atom [{:data {:id "0" :word "(root)"}}])
@@ -468,7 +469,12 @@ by Alexander K. Lew, Tan Zhi-Xuan, Gabriel Grand, Vikash K. Mansinghka
                                                    (let [node-id (str (swap! *node-id inc))]
                                                      (swap! *nodes conj {:data {:id node-id
                                                                                 :token token
-                                                                                :word (untokenize [token])}})
+                                                                                :word (untokenize [token])
+                                                                                :background (if (->> child
+                                                                                                     :llama-state-id
+                                                                                                     (has? *cache))
+                                                                                              "lightgreen"
+                                                                                              "lightgrey")}})
                                                      [token (-> child
                                                                 (assoc :node-id node-id))])))
                                             (into {})))))
@@ -494,7 +500,7 @@ by Alexander K. Lew, Tan Zhi-Xuan, Gabriel Grand, Vikash K. Mansinghka
                            v)
                          v)))))]
   (kind/cytoscape
-   {;; :trie trie
+   { ;:trie trie
     :elements {:nodes @*nodes
                :edges @*edges}
     :style [{:selector "node"
@@ -503,7 +509,7 @@ by Alexander K. Lew, Tan Zhi-Xuan, Gabriel Grand, Vikash K. Mansinghka
                    :text-halign "center"
                    :height 50
                    :width 50
-                   :background-color "lightgrey"}}
+                   :background-color "data(background)"}}
             {:selector "edge"
              :css {:curve-style "bezier"
                    :target-arrow-shape "triangle"}}]
