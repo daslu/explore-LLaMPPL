@@ -57,13 +57,7 @@ by Alexander K. Lew, Tan Zhi-Xuan, Gabriel Grand, Vikash K. Mansinghka
    llama7b-path
    {:use-mlock true}))
 
-(delay
-  (let [llama-ctx (new-llama-ctx)]
-    (-> llama-ctx
-        (llama/llama-update "How much wood would a")
-        llama/get-logits
-        argops/argmax
-        token->str)))
+
 
 ;; A copy of an empty model
 ;; (to extract basic information):
@@ -105,7 +99,9 @@ by Alexander K. Lew, Tan Zhi-Xuan, Gabriel Grand, Vikash K. Mansinghka
        tokenize
        (map token->str)))
 
-;; The EOS (end-of-sentence) token:
+
+
+;; The EOS (end-of-sentence) token:Color
 (def llama-eos (llama/eos base-llama-ctx))
 
 (defn finished? [tokens]
@@ -136,6 +132,14 @@ by Alexander K. Lew, Tan Zhi-Xuan, Gabriel Grand, Vikash K. Mansinghka
   (let [llama-ctx (new-llama-ctx)]
     (-> llama-ctx
         (llama/llama-update "What is the")
+        llama/get-logits
+        argops/argmax
+        token->str)))
+
+(delay
+  (let [llama-ctx (new-llama-ctx)]
+    (-> llama-ctx
+        (llama/llama-update "How much wood would a")
         llama/get-logits
         argops/argmax
         token->str)))
