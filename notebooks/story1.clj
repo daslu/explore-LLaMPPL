@@ -160,7 +160,7 @@ by Alexander K. Lew, Tan Zhi-Xuan, Gabriel Grand, Vikash K. Mansinghka
     mem))
 
 ;; Let us create a space to store a few such states:
-(def n-memories 10)
+(def n-memories 70)
 
 (defonce memories
   (vec (repeatedly n-memories #(byte-array state-size))))
