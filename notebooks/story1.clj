@@ -341,7 +341,8 @@ by Alexander K. Lew, Tan Zhi-Xuan, Gabriel Grand, Vikash K. Mansinghka
                        (assoc
                         :sub-trie next-sub-trie
                         :path next-path
-                        :remaining-tokens (rest remaining-tokens)))))
+                        :remaining-tokens (rest remaining-tokens)
+                        :logits (:logits next-sub-trie)))))
           ;; Else, we need to create the next sub trie.
           (let [{:keys [state-id state-data]}
                 (lookup-or-miss!
@@ -371,7 +372,8 @@ by Alexander K. Lew, Tan Zhi-Xuan, Gabriel Grand, Vikash K. Mansinghka
                                            (raw/llama_set_state_data llama-ctx)))
                                     ;; Otherwise, our current state is what we need.
                                     :else
-                                    (prn [:continue]))
+                                    (do (prn [:continue])
+                                        nil))
                                   ;; Evaluate the current token:
                                   (prn [:eval
                                         (path->text path)
@@ -398,7 +400,8 @@ by Alexander K. Lew, Tan Zhi-Xuan, Gabriel Grand, Vikash K. Mansinghka
                            (assoc :llama-ctx-state-id state-id
                                   :sub-trie new-sub-trie
                                   :path next-path
-                                  :remaining-tokens (rest remaining-tokens)))))))))))
+                                  :remaining-tokens (rest remaining-tokens)
+                                  :logits (:logits new-sub-trie)))))))))))
 
 
 (defn new-context
@@ -422,7 +425,7 @@ by Alexander K. Lew, Tan Zhi-Xuan, Gabriel Grand, Vikash K. Mansinghka
                     (assoc :tokens tokens)
                     cached-eval)]
     (reset! *context
-            (select-keys context [:llama-ctx :*cache :samplef :trie :sub-trie]))
+            (select-keys context [:llama-ctx :*cache :samplef :trie :logits]))
     context))
 
 (defn logits! [*context tokens]
