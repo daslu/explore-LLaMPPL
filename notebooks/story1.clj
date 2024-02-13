@@ -391,8 +391,9 @@ by Alexander K. Lew, Tan Zhi-Xuan, Gabriel Grand, Vikash K. Mansinghka
                                   #_(prn [:extract-state])
                                   llama-ctx)})
                 ;; Create the next sub trie:
-                new-sub-trie {:logits (llama/get-logits llama-ctx)
-                              :llama-state-id state-id}]
+                new-sub-trie (merge next-sub-trie
+                                    {:logits (llama/get-logits llama-ctx)
+                                     :llama-state-id state-id})]
             ;; Step into the next sub trie:
             (do #_(prn [:recur-new (path->text next-path)])
                 (recur (-> context
