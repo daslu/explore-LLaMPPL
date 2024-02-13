@@ -103,9 +103,9 @@ by Alexander K. Lew, Tan Zhi-Xuan, Gabriel Grand, Vikash K. Mansinghka
 (def llama-eos (llama/eos base-llama-ctx))
 
 (defn finished? [tokens]
-  (-> tokens
-      last
-      (= llama-eos)))
+  (->> tokens
+       (some (partial = llama-eos))
+       some?))
 
 ;; Example:
 ;; Getting next-token logits for a given sequence of tokens.
@@ -320,7 +320,7 @@ by Alexander K. Lew, Tan Zhi-Xuan, Gabriel Grand, Vikash K. Mansinghka
     (if (empty? remaining-tokens)
       ;; done - return this context
       (do
-        (prn [:done (path->text path)])
+        #_(prn [:done (path->text path)])
         context)
       ;; else
       (let [token (first remaining-tokens)
@@ -336,7 +336,7 @@ by Alexander K. Lew, Tan Zhi-Xuan, Gabriel Grand, Vikash K. Mansinghka
           ;; and we have its llama state still in the cache,
           ;; so let us step into it.
           (do
-            (prn [:recur-known (path->text next-path)])
+            #_(prn [:recur-known (path->text next-path)])
             (recur (-> context
                        (assoc
                         :sub-trie next-sub-trie
@@ -355,7 +355,7 @@ by Alexander K. Lew, Tan Zhi-Xuan, Gabriel Grand, Vikash K. Mansinghka
                                     ;; take the base state.
                                     (= path [])
                                     (do
-                                      (prn [:set-from-base])
+                                      #_(prn [:set-from-base])
                                       (raw/llama_set_state_data llama-ctx
                                                                 base-state-data))
                                     ;; When the last evaluation does not fit
@@ -365,14 +365,14 @@ by Alexander K. Lew, Tan Zhi-Xuan, Gabriel Grand, Vikash K. Mansinghka
                                         :llama-state-id
                                         (not= llama-ctx-state-id))
                                     (do
-                                      (prn [:set-from-cache])
+                                      #_(prn [:set-from-cache])
                                       (->> sub-trie
                                            :llama-state-id
                                            (lookup *cache)
                                            (raw/llama_set_state_data llama-ctx)))
                                     ;; Otherwise, our current state is what we need.
                                     :else
-                                    (do (prn [:continue])
+                                    (do #_(prn [:continue])
                                         nil))
                                   ;; Evaluate the current token:
                                   (prn [:eval
@@ -388,13 +388,13 @@ by Alexander K. Lew, Tan Zhi-Xuan, Gabriel Grand, Vikash K. Mansinghka
                                                             count)
                                                        ;; num-threads
                                                        8))
-                                  (prn [:extract-state])
+                                  #_(prn [:extract-state])
                                   llama-ctx)})
                 ;; Create the next sub trie:
                 new-sub-trie {:logits (llama/get-logits llama-ctx)
                               :llama-state-id state-id}]
             ;; Step into the next sub trie:
-            (do (prn [:recur-new (path->text next-path)])
+            (do #_(prn [:recur-new (path->text next-path)])
                 (recur (-> context
                            (update :trie assoc-in next-path new-sub-trie)
                            (assoc :llama-ctx-state-id state-id
@@ -616,46 +616,53 @@ by Alexander K. Lew, Tan Zhi-Xuan, Gabriel Grand, Vikash K. Mansinghka
 
 (defn M-step [*context
               previous-tokens]
-  (->> previous-tokens
-       (logits! *context)
-       (sample-once! *context)
-       (conj previous-tokens)))
+  (if (finished? previous-tokens)
+    previous-tokens
+    (->> previous-tokens
+         (logits! *context)
+         (sample-once! *context)
+         (conj previous-tokens))))
 
 
 (delay
   (let [*context (atom (new-context {:seed 1}))]
-    (->> #(->> "How much wood"
-               tokenize
-               (iterate (partial M-step *context))
-               (take 5)
-               last
-               untokenize)
-         (repeatedly 5)
-         vec)
-    (visualize-trie @*context)))
+    [(->> #(->> "How much wood"
+                tokenize
+                (iterate (partial M-step *context))
+                (take 5)
+                last
+                untokenize)
+          (repeatedly 5)
+          vec)
+     (visualize-trie @*context)]))
 
 
 (delay
   (let [*context (atom (new-context {:seed 1}))]
-    (->> #(->> "How much wood"
-               tokenize
-               (iterate (partial M-step *context))
-               (take 40)
-               last
-               untokenize)
-         (repeatedly 2)
-         vec)))
+    [(->> #(->> "How much wood"
+                tokenize
+                (iterate (partial M-step *context))
+                (take 40)
+                last
+                untokenize)
+          (repeatedly 2)
+          vec)
+     (visualize-trie @*context)]))
 
 (delay
   (let [*context (atom (new-context {:seed 1}))]
-    (->> #(->> "The Fed says"
-               tokenize
-               (iterate (partial M-step *context))
-               (take 40)
-               (mapv (juxt finished?
-                           untokenize)))
-         (repeatedly 2)
-         vec)))
+    [(->> (fn []
+            [(->> "The Fed says"
+                  tokenize
+                  (iterate (partial M-step *context))
+                  (take 38)
+                  (map (juxt finished?
+                             untokenize))
+                  (map-indexed vector)
+                  vec)
+             (visualize-trie @*context)])
+          (repeatedly 2)
+          vec)]))
 
 ;; ### The potential function
 
