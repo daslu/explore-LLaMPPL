@@ -434,13 +434,7 @@ by Alexander K. Lew, Tan Zhi-Xuan, Gabriel Grand, Vikash K. Mansinghka
       :sub-trie
       :logits))
 
-(delay
-  (let [*context (atom (new-context))]
-    (->> "How much wood"
-         tokenize
-         (logits! *context)
-         argops/argmax
-         token->str)))
+
 
 (defn visualize-trie [context]
   (let [{:keys [*cache trie]} context
@@ -510,6 +504,21 @@ by Alexander K. Lew, Tan Zhi-Xuan, Gabriel Grand, Vikash K. Mansinghka
                :css {:curve-style "bezier"
                      :target-arrow-shape "triangle"}}]
       :layout {:name "cose"}})))
+
+(delay
+  (let [*context (atom (new-context))]
+    [(->> "How much wood would"
+          tokenize
+          (logits! *context)
+          argops/argmax
+          token->str)
+     (visualize-trie @*context)
+     (->> "How much wood could"
+          tokenize
+          (logits! *context)
+          argops/argmax
+          token->str)
+     (visualize-trie @*context)]))
 
 (delay
   (let [*context (atom (new-context))]
@@ -622,7 +631,8 @@ by Alexander K. Lew, Tan Zhi-Xuan, Gabriel Grand, Vikash K. Mansinghka
                last
                untokenize)
          (repeatedly 5)
-         vec)))
+         vec)
+    (visualize-trie @*context)))
 
 
 (delay
