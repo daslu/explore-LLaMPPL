@@ -12,7 +12,8 @@
             [aerial.hanami.templates :as ht]
             [tablecloth.api :as tc]
             [clojure.string :as str]
-            [clojure.walk :as walk]))
+            [clojure.walk :as walk]
+            [tech.v3.datatype.functional :as fun]))
 
 (def md
   (comp kindly/hide-code kind/md))
@@ -508,18 +509,17 @@ by Alexander K. Lew, Tan Zhi-Xuan, Gabriel Grand, Vikash K. Mansinghka
 
 (delay
   (let [*context (atom (new-context))]
-    [(->> "How much wood would"
-          tokenize
-          (logits! *context)
-          argops/argmax
-          token->str)
-     (visualize-trie @*context)
-     (->> "How much wood could"
-          tokenize
-          (logits! *context)
-          argops/argmax
-          token->str)
-     (visualize-trie @*context)]))
+    (->> "How much wood would"
+         tokenize
+         (logits! *context)
+         argops/argmax
+         token->str)
+    (->> "How much wood could"
+         tokenize
+         (logits! *context)
+         argops/argmax
+         token->str)
+    (visualize-trie @*context)))
 
 (delay
   (let [*context (atom (new-context))]
@@ -528,10 +528,10 @@ by Alexander K. Lew, Tan Zhi-Xuan, Gabriel Grand, Vikash K. Mansinghka
           "How are"
           "Roses are"
           "This is very"]
-         (run! (fn [text]
-                 (->> text
-                      tokenize
-                      (cached-eval! *context)))))
+         (run-smc! (fn [text]
+                     (->> text
+                          tokenize
+                          (cached-eval! *context)))))
     (visualize-trie @*context)))
 
 
@@ -656,22 +656,218 @@ by Alexander K. Lew, Tan Zhi-Xuan, Gabriel Grand, Vikash K. Mansinghka
             [(->> "The Fed says"
                   tokenize
                   (iterate (partial M-step *context))
-                  (take 38)
+                  (take 20)
                   (map (juxt finished?
                              untokenize))
                   (map-indexed vector)
                   vec)
              (visualize-trie @*context)])
-          (repeatedly 2)
+          (repeatedly 10)
           vec)]))
 
 ;; ### The potential function
 
+(defn G [threshold current-tokens]
+  (if (-> current-tokens
+          untokenize
+          (str/split  #" ")
+          (->> (every? #(-> % count (<= threshold)))))
+    1 0))
 
 
-#_(defn G [threshold current-tokens]
-    (if (-> current-tokens
-            context/untokenize
-            (str/split  #" ")
-            (->> (every? #(-> % count (<= threshold)))))
-      1 0))
+(defn normalize [ws]
+  (fun// ws
+         (fun/sum ws)))
+
+(defn find-c [weights N]
+  (prn [:weights weights
+        :N N])
+  (let [sorted-weights (vec (sort weights))]
+    (loop [B-val 0.0
+           A-val (count weights)
+           i 0]
+      (let [chi (sorted-weights i)
+            new-A-val (dec A-val)
+            new-B-val (+ B-val chi)]
+        (if (= i N)
+          N
+          (if (-> new-B-val
+                  (/ chi)
+                  (+ new-A-val)
+                  (- N)
+                  (<= 1e-12))
+            (/ (- N new-A-val)
+               new-B-val)
+            (recur new-B-val
+                   new-A-val
+                   (inc i))))))))
+
+(delay
+  (find-c [0.1 0.2] 10))
+
+(delay
+  (let [*context (atom (new-context {:seed 1}))]
+    (->> "Please complete the sentence in ten words. Clojure is a"
+         tokenize
+         (M-step *context)
+         (M-step *context)
+         (M-step *context)
+         ((juxt untokenize
+                (partial G 9)
+                (partial G 12))))))
+
+
+(defn new-smc-state [] {:stop false
+                        :particles []})
+
+(defn run-smc!
+  [*smc-state
+   {:keys [cache-threshold
+           seed
+           max-token-length
+           N
+           K
+           base-text
+           initial-N
+           max-text-length]}]
+  (let [*context (atom (new-context {:seed 1}))
+        s0 (tokenize base-text)]
+    (swap! *smc-state
+           assoc :particles  (tc/dataset {:x (repeat initial-N s0)
+                                          :w 1
+                                          :time (repeat initial-N (now))
+                                          :gen 0}))
+    (loop [gen 1]
+      (let [particles (:particles @*smc-state)
+            finished (->> particles
+                          :x
+                          (map (fn [x]
+                                 (or (finished? x)
+                                     (-> x count (>= max-text-length))))))]
+        (->> finished
+             frequencies
+             (vector :finished-freqs)
+             prn)
+        (if (or (:stop @*smc-state)
+                (every? true? finished))
+          {:particles particles
+           :Z (-> particles :w fun/mean)}
+          ;; else
+          (let [K (->> finished
+                       (map (fn [f]
+                              (if f 1 K))))
+                N-prime (fun/sum K)
+                new-particles (-> particles
+                                  (tc/add-columns {:K K
+                                                   :finished finished})
+                                  (tc/rows :as-maps)
+                                  (->> (map (fn [{:keys [x w finished K]
+                                                  :as row}]
+                                              (if finished
+                                                (tc/dataset {:x [x]
+                                                             :w [(* w N-prime (/ N))]
+                                                             :time [(:time row)]
+                                                             :gen [(:gen row)]})
+                                                ;; else
+                                                (-> (range K)
+                                                    (->> (map (fn [k]
+                                                                (-> {:x (M-step *context x)
+                                                                     :time (now)
+                                                                     :gen gen}))))
+                                                    tc/dataset
+                                                    (tc/map-columns
+                                                     :w
+                                                     [:x]
+                                                     (fn [x]
+                                                       (* (/ N-prime
+                                                             (* K N))
+                                                          w
+                                                          (G max-token-length x))))))))
+                                       (apply tc/concat))
+                                  (tc/add-column :w #(-> % :w normalize))
+                                  ((fn [{:keys [x w time gen]
+                                         :as new-particles}]
+                                     (prn [:new-particles new-particles])
+                                     (let [w-sum (fun/sum w)
+                                           c* (find-c w N)
+                                           indexes (-> new-particles
+                                                       tc/row-count
+                                                       range)
+                                           I-det (->> indexes
+                                                      (filter (fn [i]
+                                                                (-> i
+                                                                    w
+                                                                    (* c*)
+                                                                    (>= 1)))))
+                                           I-stoch (->> indexes
+                                                        (filter (fn [i]
+                                                                  (-> i
+                                                                      w
+                                                                      (* c*)
+                                                                      (< 1))))
+                                                        vec)
+                                           alpha (/ (->> I-stoch
+                                                         (map w)
+                                                         fun/sum)
+                                                    (- N (count I-det)))
+                                           I-strat (loop [candidates I-stoch
+                                                          U (* alpha (rand))
+                                                          I-strat []]
+                                                     (if (empty? candidates)
+                                                       I-strat
+                                                       (let [i (first candidates)
+                                                             U (- U (w i))]
+                                                         (if (neg? U)
+                                                           (recur (rest candidates)
+                                                                  (+ U alpha)
+                                                                  (conj I-strat i))
+                                                           (recur (rest candidates)
+                                                                  U
+                                                                  I-strat)))))]
+                                       (prn [:c* c*
+                                             :I-det I-det
+                                             :I-stoch I-stoch
+                                             :I-strat I-strat])
+                                       (tc/dataset
+                                        (concat (->> I-det
+                                                     (map (fn [i]
+                                                            {:x (x i)
+                                                             :w (* (w i)
+                                                                   (/ N N-prime))
+                                                             :time (time i)
+                                                             :gen (gen i)})))
+                                                (->> I-strat
+                                                     (map (fn [i]
+                                                            {:x (x i)
+                                                             :w (* (/ N N-prime c*)
+                                                                   w-sum)
+                                                             :time (time i)
+                                                             :gen (gen i)})))))))))]
+            (swap! *smc-state
+                   assoc :particles new-particles)
+            (recur (inc gen))))))))
+
+
+(delay
+  (let [*smc-state (atom (new-smc-state))]
+    (run-smc! *smc-state
+              {:cache-threshold 30
+               :seed 1
+               :base-text "The Fed says"
+               :max-token-length 5
+               :N 15
+               :K 3
+               :initial-N 5
+               :max-text-length 10})
+    (-> @*smc-state
+        :particles
+        (tc/map-columns :finished
+                        [:x]
+                        finished?)
+        (tc/map-columns :length
+                        [:x]
+                        count)
+        (tc/map-columns :x
+                        [:x]
+                        untokenize)
+        (tech.v3.dataset.print/print-range :all))))
